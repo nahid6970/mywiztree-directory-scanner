@@ -1,14 +1,21 @@
 # ============================================================
-# snapshot.py — Save, load, and diff directory scan snapshots
+# snapshot.py — Compact snapshots: one line per entry (size\tpath)
+#
+# File format:
+#   Line 1: JSON header  {"n": name, "t": timestamp, "r": root_path}
+#   Line 2+: <size>\t<path>   (dirs end with \, files don't)
+#
+# ~10-20x smaller than the old nested-JSON format.
+# Old .json snapshots are still loadable via legacy fallback.
 # ============================================================
 
-import json
 import os
+import json
 import time
 from dataclasses import dataclass
 from typing import Optional
 
-from src.scanner import FileNode, format_size
+from src.scanner import FileNode, format_size, build_flat_list
 
 
 SNAPSHOTS_DIR = os.path.join(os.path.dirname(__file__), "..", "snapshots")
@@ -18,102 +25,140 @@ def ensure_snapshots_dir():
     os.makedirs(SNAPSHOTS_DIR, exist_ok=True)
 
 
-# ── Serialisation ────────────────────────────────────────────────────────────
-
-def _node_to_dict(node: FileNode) -> dict:
-    """Recursively convert a FileNode tree to a plain dict (JSON-serialisable)."""
-    return {
-        "name":       node.name,
-        "path":       node.path,
-        "size":       node.size,
-        "is_dir":     node.is_dir,
-        "modified":   node.modified,
-        "file_count": node.file_count,
-        "extension":  node.extension,
-        "children":   [_node_to_dict(c) for c in node.children],
-    }
-
-
-def _dict_to_node(d: dict, parent: Optional[FileNode] = None) -> FileNode:
-    """Recursively rebuild a FileNode tree from a plain dict."""
-    node = FileNode(
-        name       = d["name"],
-        path       = d["path"],
-        size       = d["size"],
-        is_dir     = d["is_dir"],
-        modified   = d["modified"],
-        file_count = d["file_count"],
-        children   = [],
-        parent     = parent,
-        extension  = d.get("extension", ""),
-    )
-    node.children = [_dict_to_node(c, parent=node) for c in d.get("children", [])]
-    return node
-
-
 # ── Save ─────────────────────────────────────────────────────────────────────
 
 def save_snapshot(root: FileNode, name: str) -> str:
     """
-    Save a scan snapshot to disk.
-    Returns the path of the saved file.
+    Save a compact snapshot.
+    Format: header JSON on line 1, then one tab-separated (size, path) per line.
+    Returns the saved filepath.
     """
     ensure_snapshots_dir()
-    safe_name = "".join(c if c.isalnum() or c in "-_ " else "_" for c in name).strip()
-    filename  = f"{safe_name}.json"
-    filepath  = os.path.join(SNAPSHOTS_DIR, filename)
+    safe  = "".join(c if c.isalnum() or c in "-_ " else "_" for c in name).strip()
+    fpath = os.path.join(SNAPSHOTS_DIR, f"{safe}.snap")
 
-    data = {
-        "snapshot_name": name,
-        "saved_at":      time.time(),
-        "root_path":     root.path,
-        "tree":          _node_to_dict(root),
-    }
+    header = json.dumps({
+        "n": name,
+        "t": time.time(),
+        "r": root.path,
+    }, separators=(",", ":"))
 
-    with open(filepath, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+    flat = build_flat_list(root)
 
-    return filepath
+    with open(fpath, "w", encoding="utf-8", buffering=1 << 20) as f:
+        f.write(header + "\n")
+        for node in flat:
+            # Append backslash to path to mark directories
+            path = node.path + "\\" if node.is_dir and not node.path.endswith("\\") else node.path
+            f.write(f"{node.size}\t{path}\n")
+
+    return fpath
 
 
-def load_snapshot(filepath: str) -> tuple[FileNode, dict]:
+# ── Load ─────────────────────────────────────────────────────────────────────
+
+def load_snapshot(filepath: str) -> tuple["SnapData", dict]:
     """
     Load a snapshot from disk.
-    Returns (root_node, metadata_dict).
+    Returns (SnapData, meta_dict).
+    Supports both new .snap format and legacy .json format.
     """
+    if filepath.endswith(".json"):
+        return _load_legacy_json(filepath)
+
+    entries: dict[str, int] = {}   # path → size
+    meta = {}
+
+    with open(filepath, "r", encoding="utf-8", buffering=1 << 20) as f:
+        header_line = f.readline()
+        try:
+            h    = json.loads(header_line)
+            meta = {
+                "snapshot_name": h.get("n", ""),
+                "saved_at":      h.get("t", 0.0),
+                "root_path":     h.get("r", ""),
+            }
+        except Exception:
+            meta = {"snapshot_name": "", "saved_at": 0.0, "root_path": ""}
+
+        for line in f:
+            line = line.rstrip("\n")
+            if not line:
+                continue
+            tab = line.index("\t")
+            size = int(line[:tab])
+            path = line[tab + 1:]
+            entries[path] = size
+
+    return SnapData(entries=entries, root_path=meta.get("root_path", "")), meta
+
+
+def _load_legacy_json(filepath: str) -> tuple["SnapData", dict]:
+    """Fallback loader for old nested-JSON snapshots."""
     with open(filepath, "r", encoding="utf-8") as f:
         data = json.load(f)
 
-    root = _dict_to_node(data["tree"])
     meta = {
         "snapshot_name": data.get("snapshot_name", ""),
         "saved_at":      data.get("saved_at", 0.0),
         "root_path":     data.get("root_path", ""),
     }
-    return root, meta
 
+    # Flatten the old tree into path→size dict
+    entries: dict[str, int] = {}
+
+    def _walk(node_dict):
+        path = node_dict["path"]
+        if node_dict.get("is_dir"):
+            path = path + "\\" if not path.endswith("\\") else path
+        entries[path] = node_dict["size"]
+        for child in node_dict.get("children", []):
+            _walk(child)
+
+    _walk(data["tree"])
+    return SnapData(entries=entries, root_path=meta["root_path"]), meta
+
+
+@dataclass
+class SnapData:
+    """Lightweight snapshot: just a flat path→size mapping."""
+    entries:   dict   # { path_str: size_int }  (dirs have trailing \)
+    root_path: str
+
+
+# ── List ─────────────────────────────────────────────────────────────────────
 
 def list_snapshots() -> list[dict]:
-    """
-    Return a list of available snapshots with metadata.
-    Each entry: { "filename", "filepath", "snapshot_name", "saved_at", "root_path" }
-    """
+    """Return available snapshots (both .snap and legacy .json)."""
     ensure_snapshots_dir()
     result = []
     for fname in sorted(os.listdir(SNAPSHOTS_DIR)):
-        if not fname.endswith(".json"):
+        if not (fname.endswith(".snap") or fname.endswith(".json")):
             continue
         fpath = os.path.join(SNAPSHOTS_DIR, fname)
         try:
             with open(fpath, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            result.append({
-                "filename":      fname,
-                "filepath":      fpath,
-                "snapshot_name": data.get("snapshot_name", fname),
-                "saved_at":      data.get("saved_at", 0.0),
-                "root_path":     data.get("root_path", ""),
-            })
+                first = f.readline()
+            if fname.endswith(".snap"):
+                h = json.loads(first)
+                result.append({
+                    "filename":      fname,
+                    "filepath":      fpath,
+                    "snapshot_name": h.get("n", fname),
+                    "saved_at":      h.get("t", 0.0),
+                    "root_path":     h.get("r", ""),
+                })
+            else:
+                # Legacy JSON — read just top-level keys
+                with open(fpath, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                result.append({
+                    "filename":      fname,
+                    "filepath":      fpath,
+                    "snapshot_name": data.get("snapshot_name", fname),
+                    "saved_at":      data.get("saved_at", 0.0),
+                    "root_path":     data.get("root_path", ""),
+                })
         except Exception:
             continue
     return result
@@ -123,10 +168,9 @@ def list_snapshots() -> list[dict]:
 
 @dataclass
 class DiffEntry:
-    """A single change between two snapshots."""
     path:     str
     name:     str
-    status:   str        # "new" | "deleted" | "grown" | "shrunk" | "unchanged"
+    status:   str     # "new" | "deleted" | "grown" | "shrunk"
     old_size: int = 0
     new_size: int = 0
     is_dir:   bool = False
@@ -136,7 +180,7 @@ class DiffEntry:
         return self.new_size - self.old_size
 
     def delta_str(self) -> str:
-        d = self.delta
+        d    = self.delta
         sign = "+" if d >= 0 else ""
         return f"{sign}{format_size(abs(d))}" if d != 0 else "—"
 
@@ -147,37 +191,20 @@ class DiffEntry:
         return format_size(self.new_size) if self.new_size >= 0 else "—"
 
 
-def _flatten_to_dict(node: FileNode, result: dict | None = None) -> dict:
-    """Flatten a FileNode tree to { path: FileNode }."""
-    if result is None:
-        result = {}
-    result[node.path] = node
-    for child in node.children:
-        _flatten_to_dict(child, result)
-    return result
-
-
-def diff_snapshots(old_root: FileNode, new_root: FileNode) -> list[DiffEntry]:
+def diff_snapshots(old: SnapData, new: SnapData) -> list[DiffEntry]:
     """
-    Compare two FileNode trees and return a list of DiffEntry changes.
-    Matches nodes by path (relative path from scan root for portability).
+    Diff two SnapData objects.
+    Normalises paths relative to their roots so scans of the same
+    directory from different machines/times still match.
     """
-    def normalise_key(base_path: str, full_path: str) -> str:
-        """Make paths relative to the root so different scan bases still match."""
+    def rel(base: str, path: str) -> str:
         try:
-            return os.path.relpath(full_path, base_path)
+            return os.path.relpath(path.rstrip("\\"), base)
         except ValueError:
-            return full_path
+            return path
 
-    old_base = old_root.path
-    new_base = new_root.path
-
-    old_flat = _flatten_to_dict(old_root)
-    new_flat = _flatten_to_dict(new_root)
-
-    # Normalise keys
-    old_rel = {normalise_key(old_base, p): nd for p, nd in old_flat.items()}
-    new_rel = {normalise_key(new_base, p): nd for p, nd in new_flat.items()}
+    old_rel = {rel(old.root_path, p): (p, s) for p, s in old.entries.items()}
+    new_rel = {rel(new.root_path, p): (p, s) for p, s in new.entries.items()}
 
     all_keys = set(old_rel) | set(new_rel)
     entries: list[DiffEntry] = []
@@ -185,42 +212,36 @@ def diff_snapshots(old_root: FileNode, new_root: FileNode) -> list[DiffEntry]:
     for key in all_keys:
         in_old = key in old_rel
         in_new = key in new_rel
+        is_dir = key in old_rel and old_rel[key][0].endswith("\\") or \
+                 key in new_rel and new_rel[key][0].endswith("\\")
 
         if in_old and not in_new:
-            nd = old_rel[key]
+            path, size = old_rel[key]
             entries.append(DiffEntry(
-                path=nd.path, name=nd.name,
-                status="deleted",
-                old_size=nd.size, new_size=0,
-                is_dir=nd.is_dir,
+                path=path, name=os.path.basename(path.rstrip("\\")),
+                status="deleted", old_size=size, new_size=0, is_dir=is_dir,
             ))
         elif in_new and not in_old:
-            nd = new_rel[key]
+            path, size = new_rel[key]
             entries.append(DiffEntry(
-                path=nd.path, name=nd.name,
-                status="new",
-                old_size=0, new_size=nd.size,
-                is_dir=nd.is_dir,
+                path=path, name=os.path.basename(path.rstrip("\\")),
+                status="new", old_size=0, new_size=size, is_dir=is_dir,
             ))
         else:
-            old_nd = old_rel[key]
-            new_nd = new_rel[key]
-            if new_nd.size > old_nd.size:
+            _, old_size = old_rel[key]
+            path, new_size = new_rel[key]
+            if new_size > old_size:
                 status = "grown"
-            elif new_nd.size < old_nd.size:
+            elif new_size < old_size:
                 status = "shrunk"
             else:
-                status = "unchanged"
+                continue  # unchanged — skip
 
-            if status != "unchanged":
-                entries.append(DiffEntry(
-                    path=new_nd.path, name=new_nd.name,
-                    status=status,
-                    old_size=old_nd.size, new_size=new_nd.size,
-                    is_dir=new_nd.is_dir,
-                ))
+            entries.append(DiffEntry(
+                path=path, name=os.path.basename(path.rstrip("\\")),
+                status=status, old_size=old_size, new_size=new_size, is_dir=is_dir,
+            ))
 
-    # Sort: deleted first, then new, then grown, shrunk — by abs delta desc
     order = {"deleted": 0, "new": 1, "grown": 2, "shrunk": 3}
     entries.sort(key=lambda e: (order.get(e.status, 9), -abs(e.delta)))
     return entries

@@ -15,7 +15,7 @@ from PyQt6.QtGui  import QColor, QFont
 
 from src.snapshot import (
     DiffEntry, diff_snapshots, load_snapshot, list_snapshots,
-    save_snapshot,
+    save_snapshot, SnapData,
 )
 from src.scanner  import FileNode, format_size
 from src.theme    import (
@@ -259,13 +259,13 @@ class DiffView(QWidget):
             return
 
         try:
-            old_root, old_meta = load_snapshot(old_path)
-            new_root, new_meta = load_snapshot(new_path)
+            old_snap, old_meta = load_snapshot(old_path)
+            new_snap, new_meta = load_snapshot(new_path)
         except Exception as e:
             QMessageBox.critical(self, "LOAD ERROR", str(e))
             return
 
-        entries = diff_snapshots(old_root, new_root)
+        entries = diff_snapshots(old_snap, new_snap)
         self._model.set_entries(entries)
 
         counts = {"new": 0, "deleted": 0, "grown": 0, "shrunk": 0}
