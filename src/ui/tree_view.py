@@ -32,8 +32,10 @@ COL_SIZE  = 1
 COL_BAR   = 2   # visual size bar
 COL_FILES = 3
 COL_MOD   = 4
+COLUMN_CHANGE = 5
+COLUMN_CHANGE_PCT = 6
 
-COLUMNS   = ["Name", "Size", "Size Bar", "Files", "Modified"]
+COLUMNS   = ["Name", "Size", "Size Bar", "Files", "Modified", "vs Last", "% Change"]
 
 
 # ── Item model ────────────────────────────────────────────────────────────────
@@ -119,6 +121,10 @@ class FileTreeModel(QAbstractItemModel):
                 if node.modified:
                     return time.strftime("%Y-%m-%d %H:%M", time.localtime(node.modified))
                 return "—"
+            if col == COLUMN_CHANGE:
+                return node.change_status or "—"
+            if col == COLUMN_CHANGE_PCT:
+                return "—" if node.change_pct is None else f"{node.change_pct:+.1f}%"
 
         elif role == Qt.ItemDataRole.DecorationRole:
             if col == COL_NAME:
@@ -134,6 +140,10 @@ class FileTreeModel(QAbstractItemModel):
                 return QColor(CP_SUBTEXT)
             if col == COL_MOD:
                 return QColor(CP_SUBTEXT)
+            if col == COLUMN_CHANGE:
+                return QColor(CP_GREEN if node.change_status in ("NEW", "GROWN") else CP_RED if node.change_status in ("SHRUNK", "DELETED") else CP_SUBTEXT)
+            if col == COLUMN_CHANGE_PCT:
+                return QColor(CP_GREEN if (node.change_pct or 0) > 0 else CP_RED if (node.change_pct or 0) < 0 else CP_SUBTEXT)
 
         elif role == Qt.ItemDataRole.FontRole:
             f = QFont("Consolas", 9)
@@ -146,6 +156,7 @@ class FileTreeModel(QAbstractItemModel):
             if col == COL_SIZE:  return node.size
             if col == COL_FILES: return node.file_count
             if col == COL_MOD:   return node.modified
+            if col == COLUMN_CHANGE_PCT: return node.change_pct if node.change_pct is not None else float("-inf")
             # Bar column: pct of parent (0.0–1.0)
             if col == COL_BAR:
                 if node.parent and node.parent.size > 0:
@@ -241,7 +252,7 @@ class SizeBarDelegate(QStyledItemDelegate):
 
 class TreeSortProxy(QSortFilterProxyModel):
     """Sort proxy that uses UserRole (raw int) for numeric columns."""
-    NUMERIC_COLS = (COL_SIZE, COL_BAR, COL_FILES, COL_MOD)
+    NUMERIC_COLS = (COL_SIZE, COL_BAR, COL_FILES, COL_MOD, COLUMN_CHANGE_PCT)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -337,10 +348,14 @@ class TreeFileView(QWidget):
         hdr.setSectionResizeMode(COL_BAR,   QHeaderView.ResizeMode.Fixed)
         hdr.setSectionResizeMode(COL_FILES, QHeaderView.ResizeMode.Fixed)
         hdr.setSectionResizeMode(COL_MOD,   QHeaderView.ResizeMode.Fixed)
+        hdr.setSectionResizeMode(COLUMN_CHANGE, QHeaderView.ResizeMode.Fixed)
+        hdr.setSectionResizeMode(COLUMN_CHANGE_PCT, QHeaderView.ResizeMode.Fixed)
         self._tree.setColumnWidth(COL_SIZE,  90)
         self._tree.setColumnWidth(COL_BAR,   180)
         self._tree.setColumnWidth(COL_FILES, 70)
         self._tree.setColumnWidth(COL_MOD,   140)
+        self._tree.setColumnWidth(COLUMN_CHANGE, 90)
+        self._tree.setColumnWidth(COLUMN_CHANGE_PCT, 90)
 
         # Size bar delegate on COL_BAR
         self._bar_delegate = SizeBarDelegate(self._tree)

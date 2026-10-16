@@ -43,7 +43,10 @@ def save_snapshot(root: FileNode, name: str) -> str:
         "r": root.path,
     }, separators=(",", ":"))
 
-    flat = build_flat_list(root)
+    # Removed entries are display-only rows injected into the tree for the
+    # comparison. They must not become part of the next saved baseline.
+    flat = [node for node in build_flat_list(root)
+            if getattr(node, "change_status", "") != "DELETED"]
 
     with open(fpath, "w", encoding="utf-8", buffering=1 << 20) as f:
         f.write(header + "\n")

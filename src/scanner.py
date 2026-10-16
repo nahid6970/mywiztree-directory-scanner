@@ -35,6 +35,9 @@ class FileNode:
     children:   list          # list[FileNode]
     parent:     Optional[object] = field(default=None, repr=False, compare=False)
     extension:  str = ""
+    previous_size: Optional[int] = None
+    change_status: str = ""
+    change_pct: Optional[float] = None
 
     def size_str(self) -> str:
         return format_size(self.size)

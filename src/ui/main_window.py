@@ -28,6 +28,7 @@ from src.ui.diff_view       import DiffView
 from src.ui.ext_breakdown   import ExtBreakdownPanel
 from src.ui.settings_dialog import SettingsDialog
 from src.settings           import load_settings, save_settings, DEFAULT_SETTINGS
+from src.snapshot           import list_snapshots, load_snapshot
 
 
 def _get_drives() -> list[str]:
@@ -189,6 +190,7 @@ class MainWindow(QMainWindow):
         self._settings  = load_settings()
         self._scanner:  ScannerThread | None = None
         self._root:     FileNode | None      = None
+        self._flat_nodes: list = []
 
         # Drive dropdown popup
         self._drive_dropdown = DriveDropdown(self)
@@ -357,6 +359,11 @@ class MainWindow(QMainWindow):
         btn_export.clicked.connect(self._export_csv)
         bar.addWidget(btn_export)
 
+        self._compare_btn = _btn("COMPARE", CP_YELLOW, "#1a1a00", fixed_w=100)
+        self._compare_btn.setEnabled(False)
+        self._compare_btn.clicked.connect(self._compare_last_snapshot)
+        bar.addWidget(self._compare_btn)
+
         bar.addStretch()
 
         btn_settings = _btn("SETTINGS", CP_SUBTEXT, "#1a1a1a", fixed_w=100)
@@ -410,6 +417,8 @@ class MainWindow(QMainWindow):
             self._scanner.wait()
 
         self._root = None
+        self._flat_nodes = []
+        self._compare_btn.setEnabled(False)
         self._tree_view.clear()
         self._top_files_view.clear()
 
@@ -446,6 +455,7 @@ class MainWindow(QMainWindow):
 
     def _on_scan_complete(self, result: ScanResult):
         self._root = result.root
+        self._flat_nodes = result.flat_list
 
         self._scan_btn.setEnabled(True)
         self._abort_btn.setEnabled(False)
@@ -466,6 +476,7 @@ class MainWindow(QMainWindow):
 
         # Tree view — fast (just stores root reference, expands lazily)
         self._tree_view.set_root(result.root)
+        self._compare_btn.setEnabled(True)
 
         # Extension breakdown — pre-computed
         self._ext_panel.set_data(result.ext_map, result.root.size)
@@ -481,6 +492,89 @@ class MainWindow(QMainWindow):
         self._load_top_chunk()
         if self._pending_offset < len(self._pending_top):
             self._load_timer.start()
+
+    def _compare_last_snapshot(self):
+        if not self._root:
+            return
+        # Remove display-only removed rows from any earlier comparison.
+        for node in self._flat_nodes:
+            if node.is_dir:
+                node.children[:] = [child for child in node.children
+                                    if child.change_status != "DELETED"]
+        label = self._apply_last_snapshot_comparison(self._root, self._flat_nodes)
+        self._tree_view.set_root(self._root)
+        self._feed_label.setText(f"  Snapshot comparison  │  {label}")
+        self._feed_label.setStyleSheet(f"color: {CP_YELLOW}; font-size: 9pt;")
+
+    def _apply_last_snapshot_comparison(self, root: FileNode, nodes: list) -> str:
+        """Annotate scanned nodes against the newest snapshot for this root."""
+        snapshots = [s for s in list_snapshots()
+                     if os.path.normcase(os.path.normpath(s.get("root_path", ""))) ==
+                     os.path.normcase(os.path.normpath(root.path))]
+        snapshots.sort(key=lambda s: s.get("saved_at", 0), reverse=True)
+        if not snapshots:
+            for node in nodes:
+                node.previous_size = None
+                node.change_status = ""
+                node.change_pct = None
+            return "no matching snapshot"
+
+        try:
+            previous, meta = load_snapshot(snapshots[0]["filepath"])
+        except Exception:
+            return "snapshot comparison unavailable"
+
+        def key(path: str) -> str:
+            return os.path.normcase(os.path.normpath(path.rstrip("\\/")))
+
+        old_sizes = {key(path): size for path, size in previous.entries.items()}
+        current_paths = {key(node.path) for node in nodes}
+        by_path = {key(node.path): node for node in nodes}
+        for node in nodes:
+            old = old_sizes.get(key(node.path))
+            node.previous_size = old
+            if old is None:
+                node.change_status = "NEW"
+                node.change_pct = None
+            elif node.size == old:
+                node.change_status = "UNCHANGED"
+                node.change_pct = 0.0
+            else:
+                node.change_status = "GROWN" if node.size > old else "SHRUNK"
+                node.change_pct = ((node.size - old) / old * 100.0) if old else None
+
+        # Add removed paths to their surviving parent. A removed directory
+        # represents its removed subtree, so descendants are not duplicated.
+        removed = sorted(
+            ((path, size) for path, size in previous.entries.items()
+             if key(path) not in current_paths),
+            key=lambda item: (item[0].count("\\") + item[0].count("/"), item[0]),
+        )
+        removed_dirs: set[str] = set()
+        for old_path, old_size in removed:
+            normalized = key(old_path)
+            if any(normalized.startswith(parent + os.sep) for parent in removed_dirs):
+                continue
+            is_dir = old_path.endswith(("\\", "/"))
+            plain_path = old_path.rstrip("\\/")
+            parent_key = key(os.path.dirname(plain_path))
+            parent = by_path.get(parent_key, root)
+            ghost = FileNode(
+                name=os.path.basename(plain_path), path=plain_path, size=old_size,
+                is_dir=is_dir, modified=0.0, file_count=0 if is_dir else 1,
+                children=[], parent=parent,
+                extension=os.path.splitext(plain_path)[1].lower(),
+                previous_size=old_size, change_status="DELETED", change_pct=None,
+            )
+            parent.children.append(ghost)
+            if is_dir:
+                removed_dirs.add(normalized)
+        for node in nodes:
+            if node.is_dir:
+                node.children.sort(key=lambda child: child.size, reverse=True)
+
+        stamp = time.strftime("%Y-%m-%d %H:%M", time.localtime(meta.get("saved_at", 0)))
+        return f"compared with {snapshots[0]['snapshot_name']} ({stamp})"
 
     def _load_top_chunk(self):
         chunk = self._pending_top[self._pending_offset:self._pending_offset + CHUNK_SIZE]
