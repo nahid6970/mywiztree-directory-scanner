@@ -144,6 +144,10 @@ class FileTreeModel(QAbstractItemModel):
 
         elif role == Qt.ItemDataRole.ForegroundRole:
             if col == COL_NAME:
+                if not node.is_dir and node.change_status == "NEW":
+                    return QColor(CP_GREEN)
+                if not node.is_dir and node.change_status == "DELETED":
+                    return QColor(CP_RED)
                 return QColor(CP_CYAN) if node.is_dir else QColor(CP_TEXT)
             if col == COL_SIZE:
                 return QColor(CP_YELLOW)
