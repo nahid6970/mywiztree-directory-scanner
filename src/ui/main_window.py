@@ -27,6 +27,7 @@ from src.ui.table_view      import TableView
 from src.ui.diff_view       import DiffView
 from src.ui.ext_breakdown   import ExtBreakdownPanel
 from src.ui.settings_dialog import SettingsDialog
+from src.settings           import load_settings, save_settings, DEFAULT_SETTINGS
 
 
 def _get_drives() -> list[str]:
@@ -176,13 +177,6 @@ class DriveDropdown(QFrame):
         self.hide()
 
 
-DEFAULT_SETTINGS = {
-    "top_n":              100,
-    "skip_hidden":        False,
-    "dirs_first":         True,
-    "top_files_cols":     {0, 1, 2, 4, 5},   # Name, Size, %, Modified, Path (no Files)
-}
-
 CHUNK_SIZE = 2000   # rows loaded per QTimer tick for top-files table
 
 
@@ -192,7 +186,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("myWizTree  ⚡  CYBERPUNK DISK SCANNER")
         self.resize(1400, 860)
 
-        self._settings  = DEFAULT_SETTINGS.copy()
+        self._settings  = load_settings()
         self._scanner:  ScannerThread | None = None
         self._root:     FileNode | None      = None
 
@@ -557,6 +551,7 @@ class MainWindow(QMainWindow):
         dlg = SettingsDialog(self._settings, self)
         if dlg.exec():
             self._settings = dlg.get_settings()
+            save_settings(self._settings)
             self._tree_view.set_dirs_first(self._settings["dirs_first"])
             self._top_files_view.set_visible_columns(self._settings["top_files_cols"])
 

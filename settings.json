@@ -1,0 +1,9 @@
+{
+  "top_n": 100,
+  "skip_hidden": false,
+  "dirs_first": true,
+  "top_files_cols": [
+    0,
+    1
+  ]
+}
