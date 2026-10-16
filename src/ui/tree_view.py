@@ -427,7 +427,7 @@ class TreeFileView(QWidget):
 
         self._tree.clicked.connect(self._on_click)
         self._tree.expanded.connect(self._on_expand_focus)
-        self._tree.collapsed.connect(self._on_expand_focus)
+        self._tree.collapsed.connect(self._on_collapse_focus)
         self._tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._tree.customContextMenuRequested.connect(self._context_menu)
 
@@ -454,6 +454,13 @@ class TreeFileView(QWidget):
         node = self._model.get_node(source_index)
         if node and node.is_dir:
             self._model.set_focus_node(node)
+            self._tree.viewport().update()
+
+    def _on_collapse_focus(self, proxy_index: QModelIndex):
+        source_index = self._proxy.mapToSource(proxy_index)
+        node = self._model.get_node(source_index)
+        if node and node.is_dir:
+            self._model.set_focus_node(node.parent)
             self._tree.viewport().update()
 
     # ── Internals ────────────────────────────────────────────────────────────
