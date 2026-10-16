@@ -342,9 +342,6 @@ class TreeFileView(QWidget):
     def set_root(self, root: FileNode):
         self._root = root
         self._model.set_root(root)
-        # Expand root's immediate children so it doesn't look empty
-        root_idx = self._proxy.mapFromSource(self._model.index(0, 0, QModelIndex()))
-        self._tree.expand(self._proxy.index(0, 0, QModelIndex()))
 
     def clear(self):
         self._model.clear()
