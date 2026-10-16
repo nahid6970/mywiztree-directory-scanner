@@ -237,6 +237,27 @@ class SizeBarDelegate(QStyledItemDelegate):
         return sh
 
 
+# ── Numeric-aware sort proxy ──────────────────────────────────────────────────
+
+class TreeSortProxy(QSortFilterProxyModel):
+    """Sort proxy that uses UserRole (raw int) for numeric columns."""
+    NUMERIC_COLS = (COL_SIZE, COL_BAR, COL_FILES, COL_MOD)
+
+    def lessThan(self, left: QModelIndex, right: QModelIndex) -> bool:
+        col = left.column()
+        if col in self.NUMERIC_COLS:
+            lv = self.sourceModel().data(left,  Qt.ItemDataRole.UserRole) or 0
+            rv = self.sourceModel().data(right, Qt.ItemDataRole.UserRole) or 0
+            # Dirs before files at same level when sizes are equal
+            try:
+                return float(lv) < float(rv)
+            except (TypeError, ValueError):
+                pass
+        lv = self.sourceModel().data(left,  Qt.ItemDataRole.DisplayRole) or ""
+        rv = self.sourceModel().data(right, Qt.ItemDataRole.DisplayRole) or ""
+        return str(lv).lower() < str(rv).lower()
+
+
 # ── Tree view widget ──────────────────────────────────────────────────────────
 
 class TreeFileView(QWidget):
@@ -276,7 +297,7 @@ class TreeFileView(QWidget):
 
         # Model + proxy
         self._model = FileTreeModel()
-        self._proxy = QSortFilterProxyModel()
+        self._proxy = TreeSortProxy()
         self._proxy.setSourceModel(self._model)
         self._proxy.setFilterCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         self._proxy.setFilterKeyColumn(COL_NAME)
