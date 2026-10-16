@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
     QMessageBox, QStatusBar, QProgressBar, QSizePolicy,
     QListWidget, QListWidgetItem, QFrame, QToolButton, QMenu,
 )
-from PyQt6.QtCore import Qt, QTimer, QPoint
+from PyQt6.QtCore import Qt, QTimer, QPoint, QThread, pyqtSignal
 from PyQt6.QtGui  import QFont, QColor
 
 from src.scanner   import ScannerThread, ScanResult, FileNode, format_size
@@ -180,6 +180,30 @@ class DriveDropdown(QFrame):
 CHUNK_SIZE = 2000   # rows loaded per QTimer tick for top-files table
 
 
+class SnapshotCompareThread(QThread):
+    progress = pyqtSignal(int, int, str)
+    completed = pyqtSignal(str)
+    failed = pyqtSignal(str)
+
+    def __init__(self, window, root: FileNode, nodes: list, filepath: str):
+        super().__init__(window)
+        self._window = window
+        self._root = root
+        self._nodes = nodes
+        self._filepath = filepath
+
+    def run(self):
+        try:
+            label = self._window._apply_last_snapshot_comparison(
+                self._root, self._nodes, self._filepath,
+                progress_callback=lambda value, maximum, message:
+                    self.progress.emit(value, maximum, message),
+            )
+            self.completed.emit(label)
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -190,6 +214,7 @@ class MainWindow(QMainWindow):
         self._scanner:  ScannerThread | None = None
         self._root:     FileNode | None      = None
         self._flat_nodes: list = []
+        self._compare_thread: SnapshotCompareThread | None = None
 
         # Drive dropdown popup
         self._drive_dropdown = DriveDropdown(self)
@@ -415,6 +440,8 @@ class MainWindow(QMainWindow):
             self._path_edit.setText(path)
 
     def _start_scan(self):
+        if self._compare_thread and self._compare_thread.isRunning():
+            return
         path = self._path_edit.text().strip()
         if not path:
             QMessageBox.warning(self, "NO PATH", "Enter a directory path to scan.")
@@ -513,20 +540,62 @@ class MainWindow(QMainWindow):
     def _compare_selected_snapshot(self):
         if not self._root:
             return
-        # Remove display-only removed rows from any earlier comparison.
-        for node in self._flat_nodes:
-            if node.is_dir:
-                node.children[:] = [child for child in node.children
-                                    if child.change_status != "DELETED"]
+        if self._compare_thread and self._compare_thread.isRunning():
+            return
         filepath = self._selected_snapshot_path
         if not filepath:
             self._feed_label.setText("  No saved snapshot selected for this directory")
             self._feed_label.setStyleSheet(f"color: {CP_YELLOW}; font-size: 9pt;")
             return
-        label = self._apply_last_snapshot_comparison(self._root, self._flat_nodes, filepath)
+        self._tree_view.clear()
+        self._compare_btn.setEnabled(False)
+        self._snapshot_btn.setEnabled(False)
+        self._snapshot_menu_btn.setEnabled(False)
+        self._scan_btn.setEnabled(False)
+        self._progress.setRange(0, 0)
+        self._progress.setVisible(True)
+        self._feed_label.setText("  Preparing snapshot comparison…")
+        self._feed_label.setStyleSheet(f"color: {CP_YELLOW}; font-size: 9pt;")
+
+        self._compare_thread = SnapshotCompareThread(
+            self, self._root, self._flat_nodes, filepath
+        )
+        self._compare_thread.progress.connect(self._on_compare_progress)
+        self._compare_thread.completed.connect(self._on_compare_complete)
+        self._compare_thread.failed.connect(self._on_compare_failed)
+        self._compare_thread.finished.connect(self._on_compare_thread_finished)
+        self._compare_thread.start()
+
+    def _on_compare_progress(self, value: int, maximum: int, message: str):
+        if maximum > 0:
+            self._progress.setRange(0, 100)
+            self._progress.setValue(min(100, int(value * 100 / maximum)))
+        else:
+            self._progress.setRange(0, 0)
+        self._feed_label.setText(f"  {message}")
+
+    def _on_compare_complete(self, label: str):
         self._tree_view.set_root(self._root)
+        self._progress.setVisible(False)
+        self._compare_btn.setEnabled(True)
+        self._snapshot_btn.setEnabled(True)
+        self._snapshot_menu_btn.setEnabled(bool(self._selected_snapshot_path))
+        self._scan_btn.setEnabled(True)
         self._feed_label.setText(f"  Snapshot comparison  │  {label}")
         self._feed_label.setStyleSheet(f"color: {CP_YELLOW}; font-size: 9pt;")
+
+    def _on_compare_failed(self, error: str):
+        self._tree_view.set_root(self._root)
+        self._progress.setVisible(False)
+        self._compare_btn.setEnabled(True)
+        self._snapshot_btn.setEnabled(True)
+        self._snapshot_menu_btn.setEnabled(bool(self._selected_snapshot_path))
+        self._scan_btn.setEnabled(True)
+        self._feed_label.setText(f"  Snapshot comparison failed: {error}")
+        self._feed_label.setStyleSheet(f"color: {CP_RED}; font-size: 9pt;")
+
+    def _on_compare_thread_finished(self):
+        self._compare_thread = None
 
     def _populate_snapshot_menu(self):
         self._snapshot_menu.clear()
@@ -580,7 +649,8 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "SNAPSHOT ERROR", str(e))
 
-    def _apply_last_snapshot_comparison(self, root: FileNode, nodes: list, filepath: str) -> str:
+    def _apply_last_snapshot_comparison(self, root: FileNode, nodes: list, filepath: str,
+                                        progress_callback=None) -> str:
         """Annotate scanned nodes against the selected snapshot for this root."""
         selected = next((s for s in list_snapshots() if s["filepath"] == filepath), None)
         if selected is None:
@@ -592,7 +662,11 @@ class MainWindow(QMainWindow):
             return "selected snapshot is unavailable"
 
         try:
-            previous, meta = load_snapshot(filepath)
+            previous, meta = load_snapshot(
+                filepath,
+                progress_callback=lambda count: progress_callback(0, 0, f"Loading snapshot… {count:,} entries")
+                if progress_callback else None,
+            )
         except Exception:
             for node in nodes:
                 node.previous_size = None
@@ -604,10 +678,31 @@ class MainWindow(QMainWindow):
         def key(path: str) -> str:
             return os.path.normcase(os.path.normpath(path.rstrip("\\/")))
 
-        old_sizes = {key(path): size for path, size in previous.entries.items()}
-        current_paths = {key(node.path) for node in nodes}
-        by_path = {key(node.path): node for node in nodes}
-        for node in nodes:
+        old_sizes = {}
+        old_total = len(previous.entries)
+        for index, (path, size) in enumerate(previous.entries.items(), 1):
+            old_sizes[key(path)] = size
+            if progress_callback and index % 50000 == 0:
+                progress_callback(index, old_total, f"Indexing snapshot… {index:,}/{old_total:,}")
+
+        # Discard display-only deleted rows from an earlier comparison.
+        for index, node in enumerate(nodes, 1):
+            if node.is_dir:
+                node.children[:] = [child for child in node.children
+                                    if child.change_status != "DELETED"]
+            if progress_callback and index % 50000 == 0:
+                progress_callback(index, len(nodes), f"Preparing tree… {index:,}/{len(nodes):,}")
+
+        current_paths = set()
+        by_path = {}
+        for index, node in enumerate(nodes, 1):
+            node_key = key(node.path)
+            current_paths.add(node_key)
+            by_path[node_key] = node
+            if progress_callback and index % 50000 == 0:
+                progress_callback(index, len(nodes), f"Indexing current scan… {index:,}/{len(nodes):,}")
+
+        for index, node in enumerate(nodes, 1):
             old = old_sizes.get(key(node.path))
             node.previous_size = old
             node.change_delta = node.size if old is None else node.size - old
@@ -620,16 +715,20 @@ class MainWindow(QMainWindow):
             else:
                 node.change_status = "GROWN" if node.size > old else "SHRUNK"
                 node.change_pct = ((node.size - old) / old * 100.0) if old else None
+            if progress_callback and index % 50000 == 0:
+                progress_callback(index, len(nodes), f"Comparing entries… {index:,}/{len(nodes):,}")
 
         # Add removed paths to their surviving parent. A removed directory
         # represents its removed subtree, so descendants are not duplicated.
+        if progress_callback:
+            progress_callback(0, 0, "Finding removed entries…")
         removed = sorted(
             ((path, size) for path, size in previous.entries.items()
              if key(path) not in current_paths),
             key=lambda item: (item[0].count("\\") + item[0].count("/"), item[0]),
         )
         removed_dirs: set[str] = set()
-        for old_path, old_size in removed:
+        for index, (old_path, old_size) in enumerate(removed, 1):
             normalized = key(old_path)
             if any(normalized.startswith(parent + os.sep) for parent in removed_dirs):
                 continue
@@ -648,6 +747,8 @@ class MainWindow(QMainWindow):
             parent.children.append(ghost)
             if is_dir:
                 removed_dirs.add(normalized)
+            if progress_callback and index % 50000 == 0:
+                progress_callback(index, len(removed), f"Adding removed entries… {index:,}/{len(removed):,}")
         for node in nodes:
             if node.is_dir:
                 node.children.sort(key=lambda child: child.size, reverse=True)

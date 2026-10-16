@@ -60,7 +60,7 @@ def save_snapshot(root: FileNode, name: str) -> str:
 
 # ── Load ─────────────────────────────────────────────────────────────────────
 
-def load_snapshot(filepath: str) -> tuple["SnapData", dict]:
+def load_snapshot(filepath: str, progress_callback=None) -> tuple["SnapData", dict]:
     """
     Load a snapshot from disk.
     Returns (SnapData, meta_dict).
@@ -84,7 +84,7 @@ def load_snapshot(filepath: str) -> tuple["SnapData", dict]:
         except Exception:
             meta = {"snapshot_name": "", "saved_at": 0.0, "root_path": ""}
 
-        for line in f:
+        for line_number, line in enumerate(f, start=1):
             line = line.rstrip("\n")
             if not line:
                 continue
@@ -92,6 +92,8 @@ def load_snapshot(filepath: str) -> tuple["SnapData", dict]:
             size = int(line[:tab])
             path = line[tab + 1:]
             entries[path] = size
+            if progress_callback and line_number % 50000 == 0:
+                progress_callback(line_number)
 
     return SnapData(entries=entries, root_path=meta.get("root_path", "")), meta
 
