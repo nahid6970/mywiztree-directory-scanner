@@ -234,7 +234,15 @@ class SizeBarDelegate(QAbstractItemModel.__class__):
     pass  # placeholder — defined below properly
 
 
-from PyQt6.QtWidgets import QStyledItemDelegate, QStyleOptionViewItem
+from PyQt6.QtWidgets import QStyledItemDelegate, QStyleOptionViewItem, QStyle
+
+
+class NoFocusRectDelegate(QStyledItemDelegate):
+    """Keep selection styling while suppressing the native focus box."""
+    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex):
+        clean_option = QStyleOptionViewItem(option)
+        clean_option.state &= ~QStyle.StateFlag.State_HasFocus
+        super().paint(painter, clean_option, index)
 
 class SizeBarDelegate(QStyledItemDelegate):
     """
@@ -253,7 +261,7 @@ class SizeBarDelegate(QStyledItemDelegate):
 
         # Background
         if option.state & option.state.State_Selected:
-            painter.fillRect(rect, QColor("#003a3a"))
+            painter.fillRect(rect, QColor("#202020"))
         else:
             painter.fillRect(rect, QColor(CP_PANEL if rect.top() % 2 == 0 else "#161616"))
 
@@ -409,7 +417,11 @@ class TreeFileView(QWidget):
         self._tree.setItemDelegateForColumn(COL_BAR, self._bar_delegate)
 
         # Row height — QTreeView has no verticalHeader, use stylesheet
-        self._tree.setStyleSheet("QTreeView::item { height: 22px; }")
+        self._tree.setStyleSheet(
+            "QTreeView::item { height: 22px; }"
+            "QTreeView::item:selected { background-color: #202020; border: none; }"
+        )
+        self._tree.setItemDelegate(NoFocusRectDelegate(self._tree))
 
         self._tree.clicked.connect(self._on_click)
         self._tree.expanded.connect(self._on_expand_focus)
