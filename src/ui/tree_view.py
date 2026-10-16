@@ -75,11 +75,6 @@ class FileTreeModel(QAbstractItemModel):
             if current is focus:
                 return True
             current = current.parent
-        current = focus
-        while current is not None:
-            if current is node:
-                return True
-            current = current.parent
         return False
 
     # ── Required overrides ───────────────────────────────────────────────────
