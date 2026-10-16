@@ -588,11 +588,17 @@ class MainWindow(QMainWindow):
                 node.previous_size = None
                 node.change_status = ""
                 node.change_pct = None
+                node.change_delta = None
             return "selected snapshot is unavailable"
 
         try:
             previous, meta = load_snapshot(filepath)
         except Exception:
+            for node in nodes:
+                node.previous_size = None
+                node.change_status = ""
+                node.change_pct = None
+                node.change_delta = None
             return "snapshot comparison unavailable"
 
         def key(path: str) -> str:
@@ -604,6 +610,7 @@ class MainWindow(QMainWindow):
         for node in nodes:
             old = old_sizes.get(key(node.path))
             node.previous_size = old
+            node.change_delta = node.size if old is None else node.size - old
             if old is None:
                 node.change_status = "NEW"
                 node.change_pct = None
@@ -636,6 +643,7 @@ class MainWindow(QMainWindow):
                 children=[], parent=parent,
                 extension=os.path.splitext(plain_path)[1].lower(),
                 previous_size=old_size, change_status="DELETED", change_pct=None,
+                change_delta=-old_size,
             )
             parent.children.append(ghost)
             if is_dir:

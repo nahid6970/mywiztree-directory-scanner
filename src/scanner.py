@@ -38,6 +38,7 @@ class FileNode:
     previous_size: Optional[int] = None
     change_status: str = ""
     change_pct: Optional[float] = None
+    change_delta: Optional[int] = None
 
     def size_str(self) -> str:
         return format_size(self.size)

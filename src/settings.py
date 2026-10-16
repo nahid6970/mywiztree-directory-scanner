@@ -12,7 +12,7 @@ DEFAULT_SETTINGS = {
     "skip_hidden":    False,
     "dirs_first":     True,
     "top_files_cols": [0, 1, 2, 4, 5],  # Name, Size, %, Modified, Path
-    "tree_cols":      [1, 2, 3, 4, 5],  # Size, Size Bar, Files, Modified, % Change
+    "tree_cols":      [1, 2, 3, 4, 5, 6],  # Size, Size Bar, Files, Modified, % Change, Size Δ
 }
 
 

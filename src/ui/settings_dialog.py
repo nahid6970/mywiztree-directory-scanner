@@ -14,8 +14,8 @@ COL_NAME, COL_SIZE, COL_PCT, COL_COUNT, COL_MOD, COL_PATH = range(6)
 DEFAULT_TOP_FILES_COLS = {COL_NAME, COL_SIZE, COL_PCT, COL_MOD, COL_PATH}
 
 # Main tree columns — Name is always visible.
-TREE_COL_SIZE, TREE_COL_BAR, TREE_COL_FILES, TREE_COL_MOD, TREE_COL_CHANGE = range(1, 6)
-DEFAULT_TREE_COLS = {TREE_COL_SIZE, TREE_COL_BAR, TREE_COL_FILES, TREE_COL_MOD, TREE_COL_CHANGE}
+TREE_COL_SIZE, TREE_COL_BAR, TREE_COL_FILES, TREE_COL_MOD, TREE_COL_CHANGE, TREE_COL_DELTA = range(1, 7)
+DEFAULT_TREE_COLS = {TREE_COL_SIZE, TREE_COL_BAR, TREE_COL_FILES, TREE_COL_MOD, TREE_COL_CHANGE, TREE_COL_DELTA}
 
 
 class SettingsDialog(QDialog):
@@ -100,6 +100,9 @@ class SettingsDialog(QDialog):
         self._tree_col_change = QCheckBox("% Change")
         self._tree_col_change.setChecked(TREE_COL_CHANGE in tree_visible)
         form_tree.addRow("", self._tree_col_change)
+        self._tree_col_delta = QCheckBox("Size Change")
+        self._tree_col_delta.setChecked(TREE_COL_DELTA in tree_visible)
+        form_tree.addRow("", self._tree_col_delta)
         grp_tree.setLayout(form_tree)
         layout.addWidget(grp_tree)
 
@@ -131,6 +134,7 @@ class SettingsDialog(QDialog):
         if self._tree_col_files.isChecked(): tree_cols.add(TREE_COL_FILES)
         if self._tree_col_mod.isChecked(): tree_cols.add(TREE_COL_MOD)
         if self._tree_col_change.isChecked(): tree_cols.add(TREE_COL_CHANGE)
+        if self._tree_col_delta.isChecked(): tree_cols.add(TREE_COL_DELTA)
         self._settings["tree_cols"] = tree_cols
 
         self.accept()
