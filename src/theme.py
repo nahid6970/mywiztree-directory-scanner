@@ -58,14 +58,6 @@ def get_global_stylesheet() -> str:
     }}
     QComboBox::drop-down {{
         border: none;
-        width: 20px;
-    }}
-    QComboBox::down-arrow {{
-        width: 8px;
-        height: 8px;
-        border-left: 4px solid transparent;
-        border-right: 4px solid transparent;
-        border-top: 6px solid {CP_CYAN};
     }}
     QComboBox QAbstractItemView {{
         background-color: {CP_PANEL};

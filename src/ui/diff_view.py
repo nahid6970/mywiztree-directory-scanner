@@ -137,6 +137,13 @@ class DiffView(QWidget):
         """Called by main window whenever a new scan completes."""
         self._current_root = root
         self._save_btn.setEnabled(root is not None)
+        # Pre-fill name with next available number
+        self._name_edit.setText(self._next_snap_name())
+
+    def _next_snap_name(self) -> str:
+        """Return next auto-numbered name like snapshot_1, snapshot_2 etc."""
+        snaps = list_snapshots()
+        return f"snapshot_{len(snaps) + 1}"
 
     def refresh_snapshot_list(self):
         self._populate_combos()
@@ -151,7 +158,7 @@ class DiffView(QWidget):
         save_row = QHBoxLayout()
         save_row.addWidget(QLabel("SNAPSHOT NAME:"))
         self._name_edit = QLineEdit()
-        self._name_edit.setPlaceholderText("e.g.  D_drive_before_cleanup")
+        self._name_edit.setPlaceholderText("snapshot_1, snapshot_2, …")
         save_row.addWidget(self._name_edit)
         self._save_btn = QPushButton("💾  SAVE SNAPSHOT")
         self._save_btn.setEnabled(False)
@@ -221,12 +228,11 @@ class DiffView(QWidget):
             return
         name = self._name_edit.text().strip()
         if not name:
-            QMessageBox.warning(self, "NAME REQUIRED", "Enter a snapshot name first.")
-            return
+            name = self._next_snap_name()
         try:
             path = save_snapshot(self._current_root, name)
             QMessageBox.information(self, "SAVED", f"Snapshot saved:\n{path}")
-            self._name_edit.clear()
+            self._name_edit.setText(self._next_snap_name())
             self._populate_combos()
         except Exception as e:
             QMessageBox.critical(self, "SAVE ERROR", str(e))
