@@ -1,28 +1,40 @@
 # ============================================================
-# scanner.py — Threaded directory scanner with Qt signals
+# scanner.py — Multithreaded directory scanner with Qt signals
+#
+# Strategy:
+#   1. Scan the root's immediate children to find top-level subdirs
+#   2. Dispatch each subdir to a ThreadPoolExecutor (up to MAX_WORKERS)
+#   3. Each worker recursively scans its subtree independently
+#   4. Results merged back into root node on the QThread
 # ============================================================
 
 import os
 import time
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Optional
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
+# Workers = logical CPU count, capped so we don't thrash on HDD
+import os as _os
+_CPU = _os.cpu_count() or 4
+MAX_WORKERS = min(_CPU, 8)
+
 
 @dataclass
 class FileNode:
     """Represents a file or directory in the scanned tree."""
-    name: str
-    path: str
-    size: int           # bytes (total for dirs, actual for files)
-    is_dir: bool
-    modified: float     # Unix timestamp of last modification
-    file_count: int     # number of files underneath (1 for files)
-    children: list      # list[FileNode]
-    parent: Optional[object] = field(default=None, repr=False, compare=False)
-    extension: str = ""
+    name:       str
+    path:       str
+    size:       int           # bytes (total for dirs, actual for files)
+    is_dir:     bool
+    modified:   float         # Unix timestamp of last modification
+    file_count: int           # files underneath (1 for files)
+    children:   list          # list[FileNode]
+    parent:     Optional[object] = field(default=None, repr=False, compare=False)
+    extension:  str = ""
 
     def size_str(self) -> str:
         return format_size(self.size)
@@ -34,7 +46,6 @@ class FileNode:
 
 
 def format_size(size_bytes: int) -> str:
-    """Human-readable file size string."""
     if size_bytes < 1024:
         return f"{size_bytes} B"
     elif size_bytes < 1024 ** 2:
@@ -50,60 +61,157 @@ def format_size(size_bytes: int) -> str:
 @dataclass
 class ScanResult:
     """All data the UI needs, pre-computed on the worker thread."""
-    root:        "FileNode"
-    flat_list:   list          # all FileNode objects flattened
-    top_files:   list          # top N largest files
-    ext_map:     dict          # extension breakdown
-    elapsed:     float
+    root:      "FileNode"
+    flat_list: list
+    top_files: list
+    ext_map:   dict
+    elapsed:   float
 
+
+# ── Shared counter (thread-safe via GIL on int ops) ───────────────────────────
+
+class _Counter:
+    __slots__ = ("files", "dirs", "_lock")
+    def __init__(self):
+        self.files = 0
+        self.dirs  = 0
+        self._lock = threading.Lock()
+
+    def add_file(self):
+        with self._lock:
+            self.files += 1
+            return self.files
+
+    def add_dir(self):
+        with self._lock:
+            self.dirs += 1
+            return self.dirs
+
+
+# ── Core recursive scanner (runs on worker threads) ───────────────────────────
+
+def _scan_dir(path: str,
+              parent: Optional[FileNode],
+              abort_flag: list,          # [False] — set to [True] to abort
+              counter: _Counter,
+              progress_cb,               # callable(path) — throttled
+              dir_entry: Optional[os.DirEntry] = None) -> FileNode:
+    """
+    Recursively scan a directory.
+    Thread-safe: each call owns its own node; counters use a lock.
+    """
+    if abort_flag[0]:
+        raise InterruptedError()
+
+    try:
+        modified = (dir_entry.stat(follow_symlinks=False).st_mtime
+                    if dir_entry is not None else os.stat(path).st_mtime)
+    except OSError:
+        modified = 0.0
+
+    node = FileNode(
+        name       = os.path.basename(path) or path.rstrip("\\/"),
+        path       = path,
+        size       = 0,
+        is_dir     = True,
+        modified   = modified,
+        file_count = 0,
+        children   = [],
+        parent     = parent,
+    )
+    counter.add_dir()
+
+    try:
+        entries = list(os.scandir(path))
+    except (PermissionError, OSError):
+        return node
+
+    for entry in entries:
+        if abort_flag[0]:
+            raise InterruptedError()
+        try:
+            if entry.is_dir(follow_symlinks=False):
+                child = _scan_dir(entry.path, parent=node,
+                                   abort_flag=abort_flag, counter=counter,
+                                   progress_cb=progress_cb, dir_entry=entry)
+                node.children.append(child)
+                node.size       += child.size
+                node.file_count += child.file_count
+            else:
+                try:
+                    st    = entry.stat(follow_symlinks=False)
+                    fsize = st.st_size
+                    fmod  = st.st_mtime
+                except OSError:
+                    fsize = 0
+                    fmod  = 0.0
+
+                ext = os.path.splitext(entry.name)[1].lower()
+                file_node = FileNode(
+                    name       = entry.name,
+                    path       = entry.path,
+                    size       = fsize,
+                    is_dir     = False,
+                    modified   = fmod,
+                    file_count = 1,
+                    children   = [],
+                    parent     = node,
+                    extension  = ext,
+                )
+                node.children.append(file_node)
+                node.size       += fsize
+                node.file_count += 1
+
+                fc = counter.add_file()
+                if fc % 500 == 0:
+                    progress_cb(entry.path, counter.files, counter.dirs)
+
+        except (PermissionError, OSError):
+            continue
+
+    node.children.sort(key=lambda n: n.size, reverse=True)
+    return node
+
+
+# ── QThread wrapper ───────────────────────────────────────────────────────────
 
 class ScannerThread(QThread):
     """
-    Threaded directory scanner.
-
     Signals:
-        progress(str)             — throttled live path feed (every 500 files)
-        stats_update(int, int)    — (total_files, total_dirs) every 2000 files
-        scan_complete(ScanResult) — all data pre-computed, ready to hand to UI
-        scan_error(str)           — fatal error message
+        progress(str)             — throttled live path feed
+        stats_update(int, int)    — (total_files, total_dirs)
+        scan_complete(ScanResult) — all data pre-computed
+        scan_error(str)           — fatal error
     """
     progress      = pyqtSignal(str)
     stats_update  = pyqtSignal(int, int)
-    scan_complete = pyqtSignal(object)   # ScanResult
+    scan_complete = pyqtSignal(object)
     scan_error    = pyqtSignal(str)
-
-    PROGRESS_INTERVAL = 500
-    STATS_INTERVAL    = 2000
 
     def __init__(self, root_path: str, top_n: int = 100, parent=None):
         super().__init__(parent)
-        self.root_path   = root_path
-        self.top_n       = top_n
-        self._abort      = False
-        self._file_count = 0
-        self._dir_count  = 0
-        self._t_start    = 0.0
+        self.root_path  = root_path
+        self.top_n      = top_n
+        self._abort     = [False]   # list so worker threads share the reference
+        self._counter   = _Counter()
 
     def abort(self):
-        self._abort = True
+        self._abort[0] = True
 
     def run(self):
-        self._t_start = time.perf_counter()
+        t_start = time.perf_counter()
         try:
-            root = self._scan_dir(self.root_path, parent=None)
-            if self._abort:
+            root = self._parallel_scan(self.root_path)
+            if self._abort[0]:
                 return
 
-            # ── Post-processing on worker thread so UI never blocks ──────────
             self.progress.emit("  Post-processing…")
+            flat    = _build_flat_list(root)
+            top     = _get_top_files_from_flat(flat, self.top_n)
+            ext     = _get_ext_breakdown_from_flat(flat)
+            elapsed = time.perf_counter() - t_start
 
-            flat   = _build_flat_list(root)
-            top    = _get_top_files_from_flat(flat, self.top_n)
-            ext    = _get_ext_breakdown_from_flat(flat)
-
-            elapsed = time.perf_counter() - self._t_start
-
-            self.stats_update.emit(self._file_count, self._dir_count)
+            self.stats_update.emit(self._counter.files, self._counter.dirs)
             self.scan_complete.emit(ScanResult(
                 root=root, flat_list=flat,
                 top_files=top, ext_map=ext,
@@ -115,87 +223,113 @@ class ScannerThread(QThread):
         except Exception as e:
             self.scan_error.emit(f"Scan error: {e}")
 
-    # ── Core recursive scanner ────────────────────────────────────────────────
+    def _progress_cb(self, path: str, files: int, dirs: int):
+        """Called from worker threads — emit signals back to UI thread."""
+        self.progress.emit(path)
+        if files % 2000 == 0:
+            self.stats_update.emit(files, dirs)
 
-    def _scan_dir(self, path: str, parent: Optional[FileNode],
-                  dir_entry: Optional[os.DirEntry] = None) -> FileNode:
-        if self._abort:
-            raise InterruptedError()
+    def _parallel_scan(self, root_path: str) -> FileNode:
+        """
+        Scan root's immediate children, then fan out top-level subdirs
+        across a thread pool. Files at root level are handled inline.
+        """
+        abort   = self._abort
+        counter = self._counter
+        cb      = self._progress_cb
 
-        # Reuse DirEntry cached stat when available — avoids extra syscall
+        # Get root mtime
         try:
-            modified = (dir_entry.stat(follow_symlinks=False).st_mtime
-                        if dir_entry is not None else os.stat(path).st_mtime)
+            root_mtime = os.stat(root_path).st_mtime
         except OSError:
-            modified = 0.0
+            root_mtime = 0.0
 
-        node = FileNode(
-            name       = os.path.basename(path) or path,
-            path       = path,
+        root_node = FileNode(
+            name       = os.path.basename(root_path) or root_path.rstrip("\\/"),
+            path       = root_path,
             size       = 0,
             is_dir     = True,
-            modified   = modified,
+            modified   = root_mtime,
             file_count = 0,
             children   = [],
-            parent     = parent,
+            parent     = None,
         )
-        self._dir_count += 1
+        counter.add_dir()
 
+        # Read root entries
         try:
-            entries = list(os.scandir(path))
+            root_entries = list(os.scandir(root_path))
         except (PermissionError, OSError):
-            return node
+            return root_node
 
-        for entry in entries:
-            if self._abort:
-                raise InterruptedError()
+        # Split into files (handle inline) and subdirs (parallelise)
+        root_files = []
+        root_dirs  = []
+        for entry in root_entries:
             try:
                 if entry.is_dir(follow_symlinks=False):
-                    child = self._scan_dir(entry.path, parent=node, dir_entry=entry)
-                    node.children.append(child)
-                    node.size       += child.size
-                    node.file_count += child.file_count
+                    root_dirs.append(entry)
                 else:
-                    try:
-                        st    = entry.stat(follow_symlinks=False)
-                        fsize = st.st_size
-                        fmod  = st.st_mtime
-                    except OSError:
-                        fsize = 0
-                        fmod  = 0.0
-
-                    ext = os.path.splitext(entry.name)[1].lower()
-                    file_node = FileNode(
-                        name       = entry.name,
-                        path       = entry.path,
-                        size       = fsize,
-                        is_dir     = False,
-                        modified   = fmod,
-                        file_count = 1,
-                        children   = [],
-                        parent     = node,
-                        extension  = ext,
-                    )
-                    node.children.append(file_node)
-                    node.size       += fsize
-                    node.file_count += 1
-                    self._file_count += 1
-
-                    fc = self._file_count
-                    if fc % self.PROGRESS_INTERVAL == 0:
-                        self.progress.emit(entry.path)
-                    if fc % self.STATS_INTERVAL == 0:
-                        self.stats_update.emit(fc, self._dir_count)
-
-            except (PermissionError, OSError):
+                    root_files.append(entry)
+            except OSError:
                 continue
 
-        # Sort for treemap layout only — O(n log n) per dir, deferred to worker
-        node.children.sort(key=lambda n: n.size, reverse=True)
-        return node
+        # Handle files directly in root
+        for entry in root_files:
+            if abort[0]:
+                raise InterruptedError()
+            try:
+                st    = entry.stat(follow_symlinks=False)
+                fsize = st.st_size
+                fmod  = st.st_mtime
+            except OSError:
+                fsize = 0
+                fmod  = 0.0
+            ext = os.path.splitext(entry.name)[1].lower()
+            fn  = FileNode(
+                name=entry.name, path=entry.path,
+                size=fsize, is_dir=False, modified=fmod,
+                file_count=1, children=[], parent=root_node,
+                extension=ext,
+            )
+            root_node.children.append(fn)
+            root_node.size       += fsize
+            root_node.file_count += 1
+            counter.add_file()
+
+        # Parallelise subdirectory scanning
+        self.progress.emit(f"  Scanning with {MAX_WORKERS} threads…")
+
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+            futures = {
+                pool.submit(
+                    _scan_dir, entry.path, root_node,
+                    abort, counter, cb, entry
+                ): entry
+                for entry in root_dirs
+            }
+
+            for future in as_completed(futures):
+                if abort[0]:
+                    # Cancel remaining futures gracefully
+                    for f in futures:
+                        f.cancel()
+                    raise InterruptedError()
+                try:
+                    child = future.result()
+                    root_node.children.append(child)
+                    root_node.size       += child.size
+                    root_node.file_count += child.file_count
+                except InterruptedError:
+                    raise
+                except Exception:
+                    pass  # skip unreadable subtrees
+
+        root_node.children.sort(key=lambda n: n.size, reverse=True)
+        return root_node
 
 
-# ── Post-processing helpers (run on worker thread) ────────────────────────────
+# ── Post-processing helpers ───────────────────────────────────────────────────
 
 def _build_flat_list(node: FileNode, result: list | None = None) -> list:
     if result is None:
@@ -225,18 +359,13 @@ def _get_ext_breakdown_from_flat(flat: list) -> dict:
     return breakdown
 
 
-# ── Public helpers (used by other modules) ────────────────────────────────────
+# ── Public helpers ────────────────────────────────────────────────────────────
 
 def build_flat_list(node: FileNode, result: list | None = None) -> list:
-    """Public wrapper — builds a flat list of all FileNodes."""
     return _build_flat_list(node, result)
 
-
 def get_top_files(root: FileNode, n: int = 100) -> list:
-    flat = _build_flat_list(root)
-    return _get_top_files_from_flat(flat, n)
-
+    return _get_top_files_from_flat(_build_flat_list(root), n)
 
 def get_extension_breakdown(root: FileNode) -> dict:
-    flat = _build_flat_list(root)
-    return _get_ext_breakdown_from_flat(flat)
+    return _get_ext_breakdown_from_flat(_build_flat_list(root))
