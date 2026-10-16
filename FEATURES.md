@@ -1,60 +1,44 @@
 # myWizTree — Feature List
 
-A WizTree-inspired directory scanner with a Cyberpunk UI theme and snapshot diffing.
+A WizTree-inspired directory scanner with a Cyberpunk UI theme.
 
 ---
 
 ## Core Scanner
 
-- Scan any folder or full drive (C:\, D:\, etc.)
-- Animated live scan progress feed (cyberpunk style, shows files being discovered in real time)
-- Sortable table view with columns: Name, Size, % of Parent, File Count, Last Modified
-- Path navigation bar — click segments to navigate up/into folders
+- Scan any folder or full drive (C:\\, D:\\, etc.)
+- Animated live scan feed showing files discovered in real time
+- Sortable file tables and path navigation
+- Markdown files are included like other scanned files
 
----
+## Analysis and Tree
 
-## Visualization
+- Top N largest files and extension breakdown
+- Search and filter by filename or extension
+- Main tree comparison columns show `% Change` and signed `Size Δ`
+- New files are green; deleted files are red; size increases and decreases are color-coded
+- Expanding a folder highlights its name pink and dims unrelated branches
+- Collapsing a folder moves focus to its parent, bringing peer items back to normal brightness
+- Settings can hide or show main-tree columns; Name stays left-aligned and other columns are right-aligned
 
-- **Treemap view** — proportional rectangle grid showing size at a glance
-- **Cyberpunk heatmap coloring** — blocks colored by file age:
-  - Cyan = old/untouched files
-  - Red/Yellow = recently modified files
+## Snapshots and Comparison
 
----
-
-## Analysis
-
-- **Top N Largest Files** — dedicated list of the biggest files across the scanned directory
-- **Extension Breakdown** — shows how much total space each file type uses (`.mp4`, `.exe`, `.zip`, etc.)
-- **Search & Filter** — filter the tree/table by filename or extension in real time
-
----
-
-## Snapshot & Diff
-
-- **Save Snapshot** — save a named snapshot of any scan to a JSON file
-- **Load & Compare** — select any two snapshots to compare
-- **Diff View** — color-coded results showing exactly what changed:
-  - 🟢 Green — new files/folders that didn't exist in the old snapshot
-  - 🔴 Red — deleted files/folders
-  - 🟡 Yellow — files/folders that changed in size, with delta shown (e.g. `+2.3 MB`, `-400 KB`)
-  - Folder-level rollup — shows total size change per folder even when individual files differ
-
----
+- Save the current scan with the **SNAPSHOT** toolbar button
+- Snapshots record the absolute path of the scanned directory
+- The small menu beside **COMPARE** lists snapshots for the current scan path
+- Comparisons run in a background thread and show progress on large drives
+- The main tree shows unchanged, new, deleted, grown, and shrunk entries
+- Compact `.snap` snapshots are used; legacy `.json` snapshots remain loadable
 
 ## Utilities
 
-- **Export to CSV** — export current scan results
-- **Right-click context menu** — copy path, open in Explorer
-- **Delete with confirmation** — select files and delete with a warning dialog
-- **↺ Restart button** — hot-reload the app to apply code changes
-- **⚙ Settings** — extensible settings dialog for user customizations
-
----
+- Export the current scan to CSV
+- Right-click to copy a path, open it in Explorer, or delete with confirmation
+- Desktop notifications appear when scans and comparisons complete
+- Settings include scanner and column visibility options
+- Restart button reloads the app
 
 ## UI / Theme
 
-- Full Cyberpunk aesthetic per `THEME_GUIDE.md`
-- Font: Consolas (monospace)
-- Color palette: near-black background, cyan/yellow/red neon accents
-- Sharp corners, neon borders, custom scrollbars
+- Near-black background with cyan, yellow, red, green, gold, and pink accents
+- Consolas monospace font, sharp corners, and custom scrollbars

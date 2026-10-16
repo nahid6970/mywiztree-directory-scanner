@@ -1,21 +1,25 @@
-# recent.md — Session Handoff
+# myWizTree — Session Handoff
 
-## 1. Project DNA (Permanent)
-Python 3.12 + PyQt6 desktop app, modular `src/` design (`scanner`, `snapshot`, `theme`, `treemap`, `ui/*`). WizTree-inspired cyberpunk disk scanner: threaded recursive scan, collapsible tree/table views, custom QPainter treemap, and JSON snapshot diffing. Entry point `main.py`.
+## Current App Behavior
 
-## 2. Latest Implementation (this session)
-- `src/snapshot.py` — migrated snapshots to compact flat `.snap` format (line 1 JSON header, then `<size>\t<path>`), ~10–20x smaller; legacy `.json` still loads.
-- `src/ui/diff_view.py` — auto-numbered default snapshot names (`snapshot_N`); pre-fill + refresh combos.
-- `src/settings.py` + `settings.json` — persistent settings (load/save, set↔list JSON conversion); `main_window.py` applies them on start/close.
-- `src/ui/tree_view.py` — file tree + `TreeSortProxy` numeric sort and dirs-first logic.
-- `.gitignore` — ignore whole `snapshots/` dir.
+- Python 3.12 + PyQt6 app; start with `python main.py`.
+- Scans include Markdown files and other regular files.
+- **SNAPSHOT** saves the current scan as a compact `.snap` file with the scanned directory's absolute path in its metadata. Legacy `.json` snapshots still load.
+- The small arrow beside **COMPARE** opens snapshots matching the current scan path. Comparison runs in a background `QThread`, shows progress, and writes results into the main tree.
+- Main-tree comparison columns are `% Change` and `Size Δ`. New/deleted files have green/red names; size changes are color-coded.
+- Settings control main-tree column visibility. Name stays left-aligned; other columns are right-aligned, and the Name column uses remaining width.
+- Expanding a folder highlights its name pink and dims unrelated branches. Collapsing it moves focus to its parent so peers return to normal brightness. Regular folder names use a warm Explorer-style gold.
+- Tree selection has no white focus box and uses a subtle dark highlight.
+- Desktop tray notification appears after scan or comparison completion; taskbar attention is used if the tray is unavailable.
 
-## 3. Critical Context
-- **Snapshot dirs** end with a trailing `\`; diff matches via `os.path.relpath` against each file's `root_path`, so re-scans of the same folder still compare.
-- **dirs-first sort**: Qt inverts `lessThan` for descending, so `TreeSortProxy` flips the dir check using `sortOrder()`.
-- **Scanner**: one `ThreadPoolExecutor` worker per top-level subdir, `MAX_WORKERS = min(cpu, 8)`; progress throttled every 500 files, stats every 2000. Root node has `parent=None`.
-- **Top-files table** loads lazily in 2000-row chunks via `QTimer` for responsiveness.
-- No external deps beyond PyQt6 — treemap/bars are hand-drawn.
+## Important Implementation Notes
 
-## 4. Pending Task
-Honor the `skip_hidden` setting: `scanner.py` still scans hidden files/folders even though the Settings dialog exposes the toggle.
+- `src/scanner.py` defines `FileNode`; comparison values are stored on nodes as display metadata.
+- `src/snapshot.py` saves compact snapshots and accepts a progress callback while loading `.snap` entries.
+- `src/ui/main_window.py` owns the Snapshot/Compare toolbar actions and the background comparison worker.
+- `src/ui/tree_view.py` implements comparison columns, column visibility, focus dimming, folder colors, and selection styling.
+- `settings.json` stores persisted tree and top-files column selections.
+
+## Known Pending Work
+
+- The Settings dialog exposes `skip_hidden`, but `scanner.py` still scans hidden files and folders. Implement this setting if requested.

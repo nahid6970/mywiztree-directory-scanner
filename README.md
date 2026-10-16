@@ -23,19 +23,21 @@ A WizTree-inspired directory scanner with a full Cyberpunk aesthetic, snapshot d
 - Top N largest files view (default: 100, configurable)
 - Extension breakdown with total size, count, avg size, and percentage bars
 - Search & filter by filename or extension
+- Main tree shows size change and percent change against a selected snapshot
+- Added and removed files are marked green and red; changed sizes use signed deltas
+- Tree expansion focuses the active folder, dims unrelated branches, and highlights the focused folder
+- Main tree columns can be shown or hidden in Settings; all non-name columns are right-aligned
 
 ✅ **Snapshot & Diff**
-- Save named snapshots of any scan to JSON
-- Load and compare any two snapshots
-- Diff view with color-coded results:
-  - 🟢 New files/folders
-  - 🔴 Deleted files/folders
-  - 🟡 Files that grew in size (with delta)
-  - 🔵 Files that shrank in size (with delta)
-  - Folder-level rollup showing total size changes
+- Save the current scan with the **SNAPSHOT** toolbar button
+- Choose a snapshot for the scanned directory from the menu beside **COMPARE**
+- Compare runs in the background and reports progress for large drives
+- The tree shows percent and size changes, plus deleted entries
+- Snapshots store the scanned directory path, so the compare menu only lists matching scans
 
 ✅ **Utilities**
 - Export current scan to CSV
+- Desktop notification when a scan or comparison completes
 - Right-click context menu: copy path, open in Explorer, delete
 - Settings dialog for customization
 - Hot-reload via ↺ Restart button
@@ -68,11 +70,12 @@ python main.py
 1. Enter a path (e.g., `C:\Users`, `D:\`) or click **📂 BROWSE**
 2. Click **⚡ SCAN** — watch the live feed as files are discovered
 3. Explore the **treemap** (click to zoom, right-click to go up)
-4. Browse **📋 FILES**, **🏆 TOP FILES**, **📊 EXTENSIONS**
+4. Browse the directory tree, **🏆 TOP FILES**, and **📊 EXTENSIONS**
 5. To track changes over time:
-   - Click **💾 SAVE SNAPSHOT** with a descriptive name
-   - Scan again later (or scan a different snapshot)
-   - Go to **🔍 SNAPSHOT DIFF** tab → pick OLD and NEW → **⚡ COMPARE**
+   - Click **SNAPSHOT** to save the current scan
+   - Scan the same directory again later
+   - Use the small menu beside **COMPARE** to choose a saved snapshot, then click **COMPARE**
+   - Review **% Change** and **Size Δ** in the main tree; comparison progress appears while large scans are processed
 
 ---
 
@@ -85,7 +88,7 @@ myWizTree_Directory_Scanner/
 ├── FEATURES.md                 # Full feature list
 ├── README.md
 ├── .gitignore
-├── snapshots/                  # Saved snapshot JSON files
+├── snapshots/                  # Saved compact .snap files (legacy .json supported)
 └── src/
     ├── scanner.py              # Threaded directory scanner
     ├── treemap.py              # Custom squarified treemap widget
@@ -94,7 +97,6 @@ myWizTree_Directory_Scanner/
     └── ui/
         ├── main_window.py      # Main window + layout
         ├── table_view.py       # Sortable file table
-        ├── diff_view.py        # Snapshot diff results
         ├── ext_breakdown.py    # Extension breakdown panel
         └── settings_dialog.py  # Settings
 ```
