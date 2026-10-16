@@ -1,0 +1,15 @@
+[project]
+name = "mywiztree"
+version = "0.1.0"
+description = "Cyberpunk directory scanner with treemap and snapshot diff"
+requires-python = ">=3.12"
+dependencies = [
+    "pyqt6>=6.7.0",
+]
+
+[project.scripts]
+mywiztree = "main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
