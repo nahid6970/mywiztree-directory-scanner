@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
     QPushButton, QLabel, QLineEdit, QTabWidget, QFileDialog,
     QMessageBox, QStatusBar, QProgressBar, QSizePolicy,
-    QListWidget, QListWidgetItem, QFrame,
+    QListWidget, QListWidgetItem, QFrame, QToolButton, QMenu,
 )
 from PyQt6.QtCore import Qt, QTimer, QPoint
 from PyQt6.QtGui  import QFont, QColor
@@ -24,11 +24,10 @@ from src.theme     import (
 )
 from src.ui.tree_view       import TreeFileView
 from src.ui.table_view      import TableView
-from src.ui.diff_view       import DiffView
 from src.ui.ext_breakdown   import ExtBreakdownPanel
 from src.ui.settings_dialog import SettingsDialog
 from src.settings           import load_settings, save_settings, DEFAULT_SETTINGS
-from src.snapshot           import list_snapshots, load_snapshot
+from src.snapshot           import list_snapshots, load_snapshot, save_snapshot
 
 
 def _get_drives() -> list[str]:
@@ -265,11 +264,9 @@ class MainWindow(QMainWindow):
 
         self._top_files_view = TableView()
         self._ext_panel      = ExtBreakdownPanel()
-        self._diff_view      = DiffView()
 
         self._tabs.addTab(self._top_files_view, "🏆  TOP FILES")
         self._tabs.addTab(self._ext_panel,       "📊  EXTENSIONS")
-        self._tabs.addTab(self._diff_view,       "🔍  SNAPSHOT DIFF")
 
         splitter.addWidget(self._tabs)
         splitter.setSizes([860, 520])   # tree gets more space
@@ -360,10 +357,27 @@ class MainWindow(QMainWindow):
         btn_export.clicked.connect(self._export_csv)
         bar.addWidget(btn_export)
 
+        self._snapshot_btn = _btn("SNAPSHOT", CP_CYAN, "#001a1a", fixed_w=100)
+        self._snapshot_btn.setEnabled(False)
+        self._snapshot_btn.clicked.connect(self._save_current_snapshot)
+        bar.addWidget(self._snapshot_btn)
+
         self._compare_btn = _btn("COMPARE", CP_YELLOW, "#1a1a00", fixed_w=100)
         self._compare_btn.setEnabled(False)
-        self._compare_btn.clicked.connect(self._compare_last_snapshot)
+        self._compare_btn.clicked.connect(self._compare_selected_snapshot)
         bar.addWidget(self._compare_btn)
+
+        self._snapshot_menu_btn = QToolButton()
+        self._snapshot_menu_btn.setText("▾")
+        self._snapshot_menu_btn.setToolTip("Choose a saved snapshot to compare with this scan")
+        self._snapshot_menu_btn.setFixedSize(28, 30)
+        self._snapshot_menu_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self._snapshot_menu_btn.setStyleSheet(f"QToolButton {{ background: #1a1a00; color: {CP_YELLOW}; border: 1px solid {CP_YELLOW}; font: bold 12pt Consolas; }} QToolButton::menu-indicator {{ image: none; }} QToolButton:hover {{ background: {CP_YELLOW}; color: #000; }}")
+        self._snapshot_menu = QMenu(self._snapshot_menu_btn)
+        self._snapshot_menu_btn.setMenu(self._snapshot_menu)
+        self._snapshot_menu_btn.setEnabled(False)
+        self._selected_snapshot_path = None
+        bar.addWidget(self._snapshot_menu_btn)
 
         bar.addStretch()
 
@@ -420,6 +434,8 @@ class MainWindow(QMainWindow):
         self._root = None
         self._flat_nodes = []
         self._compare_btn.setEnabled(False)
+        self._snapshot_btn.setEnabled(False)
+        self._snapshot_menu_btn.setEnabled(False)
         self._tree_view.clear()
         self._top_files_view.clear()
 
@@ -482,9 +498,9 @@ class MainWindow(QMainWindow):
         # Extension breakdown — pre-computed
         self._ext_panel.set_data(result.ext_map, result.root.size)
 
-        # Snapshot diff
-        self._diff_view.set_current_root(result.root)
-        self._diff_view.refresh_snapshot_list()
+        # Snapshot controls
+        self._snapshot_btn.setEnabled(True)
+        self._populate_snapshot_menu()
 
         # Top files — load lazily in chunks
         self._pending_top    = result.top_files
@@ -494,7 +510,7 @@ class MainWindow(QMainWindow):
         if self._pending_offset < len(self._pending_top):
             self._load_timer.start()
 
-    def _compare_last_snapshot(self):
+    def _compare_selected_snapshot(self):
         if not self._root:
             return
         # Remove display-only removed rows from any earlier comparison.
@@ -502,26 +518,80 @@ class MainWindow(QMainWindow):
             if node.is_dir:
                 node.children[:] = [child for child in node.children
                                     if child.change_status != "DELETED"]
-        label = self._apply_last_snapshot_comparison(self._root, self._flat_nodes)
+        filepath = self._selected_snapshot_path
+        if not filepath:
+            self._feed_label.setText("  No saved snapshot selected for this directory")
+            self._feed_label.setStyleSheet(f"color: {CP_YELLOW}; font-size: 9pt;")
+            return
+        label = self._apply_last_snapshot_comparison(self._root, self._flat_nodes, filepath)
         self._tree_view.set_root(self._root)
         self._feed_label.setText(f"  Snapshot comparison  │  {label}")
         self._feed_label.setStyleSheet(f"color: {CP_YELLOW}; font-size: 9pt;")
 
-    def _apply_last_snapshot_comparison(self, root: FileNode, nodes: list) -> str:
-        """Annotate scanned nodes against the newest snapshot for this root."""
+    def _populate_snapshot_menu(self):
+        self._snapshot_menu.clear()
+        self._selected_snapshot_path = None
+        if not self._root:
+            self._snapshot_menu.addAction("No scan loaded").setEnabled(False)
+            self._snapshot_menu_btn.setEnabled(False)
+            return
+        root_key = os.path.normcase(os.path.normpath(self._root.path))
         snapshots = [s for s in list_snapshots()
-                     if os.path.normcase(os.path.normpath(s.get("root_path", ""))) ==
-                     os.path.normcase(os.path.normpath(root.path))]
+                     if os.path.normcase(os.path.normpath(s.get("root_path", ""))) == root_key]
         snapshots.sort(key=lambda s: s.get("saved_at", 0), reverse=True)
-        if not snapshots:
+        for i, snap in enumerate(snapshots):
+            stamp = time.strftime("%Y-%m-%d %H:%M", time.localtime(snap.get("saved_at", 0)))
+            path = snap["filepath"]
+            action = self._snapshot_menu.addAction(f"{snap['snapshot_name']}  ·  {stamp}")
+            action.setCheckable(True)
+            action.setChecked(i == 0)
+            action.triggered.connect(lambda checked=False, selected=path: self._select_snapshot_for_compare(selected))
+        if snapshots:
+            self._selected_snapshot_path = snapshots[0]["filepath"]
+            self._snapshot_menu_btn.setEnabled(True)
+            self._snapshot_menu_btn.setToolTip(f"Compare to {snapshots[0]['snapshot_name']} — click to choose another")
+        else:
+            self._snapshot_menu.addAction("No saved snapshots for this directory").setEnabled(False)
+            self._snapshot_menu_btn.setEnabled(False)
+            self._snapshot_menu_btn.setToolTip("No saved snapshots for this directory")
+
+    def _select_snapshot_for_compare(self, filepath: str):
+        self._selected_snapshot_path = filepath
+        action = self.sender()
+        if action:
+            for menu_action in self._snapshot_menu.actions():
+                menu_action.setChecked(menu_action is action)
+            self._snapshot_menu_btn.setToolTip(f"Compare to {action.text()} — click to choose another")
+
+    def _save_current_snapshot(self):
+        if not self._root:
+            return
+        existing = {s.get("snapshot_name", "") for s in list_snapshots()}
+        number = 1
+        while f"snapshot_{number}" in existing:
+            number += 1
+        name = f"snapshot_{number}"
+        try:
+            save_snapshot(self._root, name)
+            self._populate_snapshot_menu()
+            # A snapshot of the current scan is now the selected baseline.
+            self._feed_label.setText(f"  Saved snapshot: {name}")
+            self._feed_label.setStyleSheet(f"color: {CP_GREEN}; font-size: 9pt;")
+        except Exception as e:
+            QMessageBox.critical(self, "SNAPSHOT ERROR", str(e))
+
+    def _apply_last_snapshot_comparison(self, root: FileNode, nodes: list, filepath: str) -> str:
+        """Annotate scanned nodes against the selected snapshot for this root."""
+        selected = next((s for s in list_snapshots() if s["filepath"] == filepath), None)
+        if selected is None:
             for node in nodes:
                 node.previous_size = None
                 node.change_status = ""
                 node.change_pct = None
-            return "no matching snapshot"
+            return "selected snapshot is unavailable"
 
         try:
-            previous, meta = load_snapshot(snapshots[0]["filepath"])
+            previous, meta = load_snapshot(filepath)
         except Exception:
             return "snapshot comparison unavailable"
 
@@ -575,7 +645,7 @@ class MainWindow(QMainWindow):
                 node.children.sort(key=lambda child: child.size, reverse=True)
 
         stamp = time.strftime("%Y-%m-%d %H:%M", time.localtime(meta.get("saved_at", 0)))
-        return f"compared with {snapshots[0]['snapshot_name']} ({stamp})"
+        return f"compared with {selected['snapshot_name']} ({stamp})"
 
     def _load_top_chunk(self):
         chunk = self._pending_top[self._pending_offset:self._pending_offset + CHUNK_SIZE]
