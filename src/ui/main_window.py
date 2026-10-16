@@ -342,7 +342,7 @@ class MainWindow(QMainWindow):
 
         bar.addSpacing(4)
 
-        btn_browse = _btn("BROWSE", CP_DIM, "#1a1a1a", fixed_w=90)
+        btn_browse = _btn("BROWSE", CP_SUBTEXT, "#1a1a1a", fixed_w=90)
         btn_browse.clicked.connect(self._browse)
         bar.addWidget(btn_browse)
 
@@ -363,7 +363,7 @@ class MainWindow(QMainWindow):
 
         bar.addStretch()
 
-        btn_settings = _btn("SETTINGS", CP_DIM, "#1a1a1a", fixed_w=100)
+        btn_settings = _btn("SETTINGS", CP_SUBTEXT, "#1a1a1a", fixed_w=100)
         btn_settings.clicked.connect(self._open_settings)
         bar.addWidget(btn_settings)
 
