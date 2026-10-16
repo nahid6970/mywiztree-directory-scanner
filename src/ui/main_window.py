@@ -605,6 +605,14 @@ class MainWindow(QMainWindow):
         self._scan_btn.setEnabled(True)
         self._feed_label.setText(f"  Snapshot comparison  │  {label}")
         self._feed_label.setStyleSheet(f"color: {CP_YELLOW}; font-size: 9pt;")
+        message = f"{self._root.path}\n{label}"
+        if self._tray_icon:
+            self._tray_icon.showMessage(
+                "myWizTree comparison complete", message,
+                QSystemTrayIcon.MessageIcon.Information, 6000,
+            )
+        else:
+            QApplication.alert(self, 5000)
 
     def _on_compare_failed(self, error: str):
         self._tree_view.set_root(self._root)
