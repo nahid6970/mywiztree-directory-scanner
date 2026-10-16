@@ -169,7 +169,7 @@ class FileTreeModel(QAbstractItemModel):
                     return QColor(CP_GREEN)
                 if not node.is_dir and node.change_status == "DELETED":
                     return QColor(CP_RED)
-                return QColor(CP_CYAN) if node.is_dir else QColor(CP_TEXT)
+                return QColor("#dcb67a") if node.is_dir else QColor(CP_TEXT)
             if col == COL_SIZE:
                 return QColor(CP_YELLOW)
             if col == COL_FILES:
