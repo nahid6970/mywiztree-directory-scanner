@@ -9,10 +9,10 @@ import time
 import string
 
 from PyQt6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
     QPushButton, QLabel, QLineEdit, QTabWidget, QFileDialog,
     QMessageBox, QStatusBar, QProgressBar, QSizePolicy,
-    QListWidget, QListWidgetItem, QFrame, QToolButton, QMenu,
+    QListWidget, QListWidgetItem, QFrame, QToolButton, QMenu, QSystemTrayIcon, QStyle,
 )
 from PyQt6.QtCore import Qt, QTimer, QPoint, QThread, pyqtSignal
 from PyQt6.QtGui  import QFont, QColor
@@ -228,6 +228,7 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self._apply_theme()
+        self._setup_notifications()
         # Apply default sort/column preferences
         self._tree_view.set_dirs_first(self._settings["dirs_first"])
         self._tree_view.set_visible_columns(self._settings["tree_cols"])
@@ -419,6 +420,26 @@ class MainWindow(QMainWindow):
     def _apply_theme(self):
         self.setStyleSheet(get_global_stylesheet())
 
+    def _setup_notifications(self):
+        self._tray_icon = None
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+        tray = QSystemTrayIcon(self)
+        tray.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon))
+        tray.setToolTip("myWizTree — disk scanner")
+        tray.show()
+        self._tray_icon = tray
+
+    def _notify_scan_complete(self, result: ScanResult):
+        title = "myWizTree scan complete"
+        message = f"{result.root.path}\n{result.root.file_count:,} files · {format_size(result.root.size)}"
+        if self._tray_icon:
+            self._tray_icon.showMessage(
+                title, message, QSystemTrayIcon.MessageIcon.Information, 6000
+            )
+        else:
+            QApplication.alert(self, 5000)
+
     # ── Scan ─────────────────────────────────────────────────────────────────
 
     def _path_edit_clicked(self, event):
@@ -510,6 +531,7 @@ class MainWindow(QMainWindow):
             f"{format_size(result.root.size)}  │  {result.elapsed:.1f}s"
         )
         self._feed_label.setStyleSheet(f"color: {CP_GREEN}; font-size: 9pt;")
+        self._notify_scan_complete(result)
 
         dirs_count = sum(1 for n in result.flat_list if n.is_dir)
         self._stats_label.setText(
