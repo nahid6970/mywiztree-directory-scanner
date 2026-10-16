@@ -206,6 +206,7 @@ class MainWindow(QMainWindow):
         self._apply_theme()
         # Apply default sort/column preferences
         self._tree_view.set_dirs_first(self._settings["dirs_first"])
+        self._tree_view.set_visible_columns(self._settings["tree_cols"])
         self._top_files_view.set_visible_columns(self._settings["top_files_cols"])
 
     # ── UI ────────────────────────────────────────────────────────────────────
@@ -647,6 +648,7 @@ class MainWindow(QMainWindow):
             self._settings = dlg.get_settings()
             save_settings(self._settings)
             self._tree_view.set_dirs_first(self._settings["dirs_first"])
+            self._tree_view.set_visible_columns(self._settings["tree_cols"])
             self._top_files_view.set_visible_columns(self._settings["top_files_cols"])
 
     # ── Restart / Close ──────────────────────────────────────────────────────

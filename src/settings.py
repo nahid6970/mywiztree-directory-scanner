@@ -12,6 +12,7 @@ DEFAULT_SETTINGS = {
     "skip_hidden":    False,
     "dirs_first":     True,
     "top_files_cols": [0, 1, 2, 4, 5],  # Name, Size, %, Modified, Path
+    "tree_cols":      [1, 2, 3, 4, 5],  # Size, Size Bar, Files, Modified, % Change
 }
 
 
@@ -31,6 +32,8 @@ def load_settings() -> dict:
     # top_files_cols is stored as list in JSON, convert to set internally
     if isinstance(settings["top_files_cols"], list):
         settings["top_files_cols"] = set(settings["top_files_cols"])
+    if isinstance(settings["tree_cols"], list):
+        settings["tree_cols"] = set(settings["tree_cols"])
 
     return settings
 
