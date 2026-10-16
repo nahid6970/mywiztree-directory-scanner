@@ -180,6 +180,7 @@ DEFAULT_SETTINGS = {
     "top_n":              100,
     "skip_hidden":        False,
     "dirs_first":         True,
+    "top_files_cols":     {0, 1, 2, 4, 5},   # Name, Size, %, Modified, Path (no Files)
 }
 
 CHUNK_SIZE = 2000   # rows loaded per QTimer tick for top-files table
@@ -207,8 +208,9 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self._apply_theme()
-        # Apply default sort preferences
+        # Apply default sort/column preferences
         self._tree_view.set_dirs_first(self._settings["dirs_first"])
+        self._top_files_view.set_visible_columns(self._settings["top_files_cols"])
 
     # ── UI ────────────────────────────────────────────────────────────────────
 
@@ -556,6 +558,7 @@ class MainWindow(QMainWindow):
         if dlg.exec():
             self._settings = dlg.get_settings()
             self._tree_view.set_dirs_first(self._settings["dirs_first"])
+            self._top_files_view.set_visible_columns(self._settings["top_files_cols"])
 
     # ── Restart / Close ──────────────────────────────────────────────────────
 

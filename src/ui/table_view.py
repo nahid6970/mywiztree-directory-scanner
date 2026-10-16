@@ -193,6 +193,12 @@ class TableView(QWidget):
     def clear(self):
         self._model.set_nodes([])
 
+    def set_visible_columns(self, visible: set[int]):
+        """Show/hide columns by index. Always keeps COL_NAME visible."""
+        hdr = self._table.horizontalHeader()
+        for col in range(len(COLUMNS)):
+            hdr.setSectionHidden(col, col not in visible)
+
     # ── Internals ────────────────────────────────────────────────────────────
 
     def _apply_filter(self, text: str):
