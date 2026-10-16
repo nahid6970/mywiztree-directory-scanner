@@ -40,7 +40,7 @@ def save_snapshot(root: FileNode, name: str) -> str:
     header = json.dumps({
         "n": name,
         "t": time.time(),
-        "r": root.path,
+        "r": os.path.abspath(os.path.normpath(root.path)),
     }, separators=(",", ":"))
 
     # Removed entries are display-only rows injected into the tree for the

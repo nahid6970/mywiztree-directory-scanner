@@ -535,9 +535,9 @@ class MainWindow(QMainWindow):
             self._snapshot_menu.addAction("No scan loaded").setEnabled(False)
             self._snapshot_menu_btn.setEnabled(False)
             return
-        root_key = os.path.normcase(os.path.normpath(self._root.path))
+        root_key = os.path.normcase(os.path.abspath(os.path.normpath(self._root.path)))
         snapshots = [s for s in list_snapshots()
-                     if os.path.normcase(os.path.normpath(s.get("root_path", ""))) == root_key]
+                     if os.path.normcase(os.path.abspath(os.path.normpath(s.get("root_path", "")))) == root_key]
         snapshots.sort(key=lambda s: s.get("saved_at", 0), reverse=True)
         for i, snap in enumerate(snapshots):
             stamp = time.strftime("%Y-%m-%d %H:%M", time.localtime(snap.get("saved_at", 0)))
