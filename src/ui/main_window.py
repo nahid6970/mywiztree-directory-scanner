@@ -179,6 +179,7 @@ class DriveDropdown(QFrame):
 DEFAULT_SETTINGS = {
     "top_n":              100,
     "skip_hidden":        False,
+    "dirs_first":         True,
 }
 
 CHUNK_SIZE = 2000   # rows loaded per QTimer tick for top-files table
@@ -206,6 +207,8 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self._apply_theme()
+        # Apply default sort preferences
+        self._tree_view.set_dirs_first(self._settings["dirs_first"])
 
     # ── UI ────────────────────────────────────────────────────────────────────
 
@@ -552,6 +555,7 @@ class MainWindow(QMainWindow):
         dlg = SettingsDialog(self._settings, self)
         if dlg.exec():
             self._settings = dlg.get_settings()
+            self._tree_view.set_dirs_first(self._settings["dirs_first"])
 
     # ── Restart / Close ──────────────────────────────────────────────────────
 

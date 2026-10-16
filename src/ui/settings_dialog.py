@@ -33,6 +33,10 @@ class SettingsDialog(QDialog):
         self._skip_hidden.setChecked(self._settings.get("skip_hidden", False))
         form.addRow("", self._skip_hidden)
 
+        self._dirs_first = QCheckBox("Folders before files")
+        self._dirs_first.setChecked(self._settings.get("dirs_first", True))
+        form.addRow("", self._dirs_first)
+
         grp.setLayout(form)
         layout.addWidget(grp)
 
@@ -47,6 +51,7 @@ class SettingsDialog(QDialog):
     def _apply(self):
         self._settings["top_n"]       = self._top_n.value()
         self._settings["skip_hidden"] = self._skip_hidden.isChecked()
+        self._settings["dirs_first"]  = self._dirs_first.isChecked()
         self.accept()
 
     def get_settings(self) -> dict:

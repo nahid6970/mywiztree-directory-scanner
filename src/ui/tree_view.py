@@ -243,12 +243,27 @@ class TreeSortProxy(QSortFilterProxyModel):
     """Sort proxy that uses UserRole (raw int) for numeric columns."""
     NUMERIC_COLS = (COL_SIZE, COL_BAR, COL_FILES, COL_MOD)
 
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._dirs_first = True
+
+    def set_dirs_first(self, enabled: bool):
+        self._dirs_first = enabled
+        self.invalidate()
+
     def lessThan(self, left: QModelIndex, right: QModelIndex) -> bool:
+        # Dirs-first: always sort dirs above files regardless of column
+        if self._dirs_first:
+            l_node = self.sourceModel().get_node(left)
+            r_node = self.sourceModel().get_node(right)
+            if l_node and r_node and l_node.is_dir != r_node.is_dir:
+                # dir < file means dir comes first in ascending order
+                return l_node.is_dir and not r_node.is_dir
+
         col = left.column()
         if col in self.NUMERIC_COLS:
             lv = self.sourceModel().data(left,  Qt.ItemDataRole.UserRole) or 0
             rv = self.sourceModel().data(right, Qt.ItemDataRole.UserRole) or 0
-            # Dirs before files at same level when sizes are equal
             try:
                 return float(lv) < float(rv)
             except (TypeError, ValueError):
@@ -345,6 +360,9 @@ class TreeFileView(QWidget):
 
     def clear(self):
         self._model.clear()
+
+    def set_dirs_first(self, enabled: bool):
+        self._proxy.set_dirs_first(enabled)
 
     # ── Internals ────────────────────────────────────────────────────────────
 
