@@ -252,13 +252,16 @@ class TreeSortProxy(QSortFilterProxyModel):
         self.invalidate()
 
     def lessThan(self, left: QModelIndex, right: QModelIndex) -> bool:
-        # Dirs-first: always sort dirs above files regardless of column
+        # Dirs-first: always keep dirs above files regardless of column or direction.
+        # Qt reverses lessThan results for descending order, so we must flip with it.
         if self._dirs_first:
             l_node = self.sourceModel().get_node(left)
             r_node = self.sourceModel().get_node(right)
             if l_node and r_node and l_node.is_dir != r_node.is_dir:
-                # dir < file means dir comes first in ascending order
-                return l_node.is_dir and not r_node.is_dir
+                asc = (self.sortOrder() == Qt.SortOrder.AscendingOrder)
+                # ascending:  dir < file → dir appears first ✓
+                # descending: dir > file → Qt reverses, dir still appears first ✓
+                return l_node.is_dir if asc else not l_node.is_dir
 
         col = left.column()
         if col in self.NUMERIC_COLS:
