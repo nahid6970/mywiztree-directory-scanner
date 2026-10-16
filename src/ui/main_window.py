@@ -6,14 +6,16 @@ import os
 import sys
 import csv
 import time
+import string
 
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
     QPushButton, QLabel, QLineEdit, QTabWidget, QFileDialog,
     QMessageBox, QStatusBar, QProgressBar, QSizePolicy,
+    QListWidget, QListWidgetItem, QFrame,
 )
-from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui  import QFont
+from PyQt6.QtCore import Qt, QTimer, QPoint
+from PyQt6.QtGui  import QFont, QColor
 
 from src.scanner   import ScannerThread, ScanResult, FileNode, format_size
 from src.theme     import (
@@ -25,6 +27,153 @@ from src.ui.table_view      import TableView
 from src.ui.diff_view       import DiffView
 from src.ui.ext_breakdown   import ExtBreakdownPanel
 from src.ui.settings_dialog import SettingsDialog
+
+
+def _get_drives() -> list[str]:
+    """Return available Windows drive letters."""
+    drives = []
+    for letter in string.ascii_uppercase:
+        drive = f"{letter}:\\"
+        if os.path.exists(drive):
+            drives.append(drive)
+    return drives
+
+
+from PyQt6.QtWidgets import QStyledItemDelegate, QStyleOptionViewItem
+from PyQt6.QtCore    import QSize
+
+class _DriveItemDelegate(QStyledItemDelegate):
+    """Renders each drive row: [CYAN drive]  [DIM label]"""
+    def paint(self, painter, option, index):
+        from PyQt6.QtGui import QPainter
+        painter.save()
+
+        is_hover = bool(option.state & option.state.State_MouseOver) or \
+                   bool(option.state & option.state.State_Selected)
+
+        bg = QColor("#002a2a") if is_hover else QColor(CP_PANEL)
+        painter.fillRect(option.rect, bg)
+
+        text: str = index.data(Qt.ItemDataRole.DisplayRole) or ""
+        parts = text.strip().split("   ", 1)
+        drive = parts[0] if parts else ""
+        label = parts[1] if len(parts) > 1 else ""
+
+        font_drive = QFont("Consolas", 10, QFont.Weight.Bold)
+        font_label = QFont("Consolas", 9)
+
+        x = option.rect.x() + 14
+        y = option.rect.y()
+        h = option.rect.height()
+
+        painter.setFont(font_drive)
+        painter.setPen(QColor(CP_CYAN))
+        painter.drawText(x, y, 60, h, Qt.AlignmentFlag.AlignVCenter, drive)
+
+        painter.setFont(font_label)
+        painter.setPen(QColor(CP_SUBTEXT) if not is_hover else QColor(CP_TEXT))
+        painter.drawText(x + 70, y, option.rect.width() - x - 70, h,
+                         Qt.AlignmentFlag.AlignVCenter, label)
+
+        painter.restore()
+
+    def sizeHint(self, option, index):
+        return QSize(200, 32)
+
+
+class DriveDropdown(QFrame):
+    """
+    Floating popup that lists available drives.
+    Appears below the path field on click.
+    """
+    def __init__(self, parent=None):
+        super().__init__(parent, Qt.WindowType.Popup)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        self.setStyleSheet(f"""
+            QFrame {{
+                background-color: {CP_PANEL};
+                border: 1px solid {CP_CYAN};
+                border-top: 2px solid {CP_CYAN};
+            }}
+            QListWidget {{
+                background-color: transparent;
+                color: {CP_TEXT};
+                border: none;
+                font-family: 'Consolas';
+                font-size: 10pt;
+                outline: none;
+                padding: 2px 0px;
+            }}
+            QListWidget::item {{
+                height: 32px;
+                padding-left: 12px;
+                border: none;
+            }}
+            QListWidget::item:hover {{
+                background-color: #002a2a;
+                color: {CP_CYAN};
+            }}
+            QListWidget::item:selected {{
+                background-color: #002a2a;
+                color: {CP_CYAN};
+            }}
+            QScrollBar:vertical {{ width: 0px; }}
+            QScrollBar:horizontal {{ height: 0px; }}
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        self._list = QListWidget()
+        self._list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        layout.addWidget(self._list)
+
+        self._callback = None
+        self._list.itemClicked.connect(self._on_item_click)
+        self._list.setItemDelegate(_DriveItemDelegate(self._list))
+
+    def show_below(self, widget: QWidget, callback):
+        self._callback = callback
+        self._list.clear()
+
+        drives = _get_drives()
+        for drive in drives:
+            try:
+                import ctypes
+                buf = ctypes.create_unicode_buffer(261)
+                ctypes.windll.kernel32.GetVolumeInformationW(
+                    drive, buf, 261, None, None, None, None, 0
+                )
+                label = buf.value or "Local Disk"
+            except Exception:
+                label = "Drive"
+
+            # Format: "C:\  —  Local Disk"
+            item = QListWidgetItem(f"  {drive}   {label}")
+            item.setData(Qt.ItemDataRole.UserRole, drive)
+            # Drive letter in cyan, label dimmer — set via font on the letter part
+            self._list.addItem(item)
+
+        row_h   = 32
+        padding = 4
+        total_h = len(drives) * row_h + padding * 2
+        self._list.setFixedHeight(total_h)
+        self.setFixedWidth(widget.width())
+        self.setFixedHeight(total_h)
+
+        global_pos = widget.mapToGlobal(QPoint(0, widget.height() - 1))
+        self.move(global_pos)
+        self.show()
+        self.raise_()
+
+    def _on_item_click(self, item: QListWidgetItem):
+        drive = item.data(Qt.ItemDataRole.UserRole)
+        if self._callback and drive:
+            self._callback(drive)
+        self.hide()
 
 
 DEFAULT_SETTINGS = {
@@ -44,6 +193,9 @@ class MainWindow(QMainWindow):
         self._settings  = DEFAULT_SETTINGS.copy()
         self._scanner:  ScannerThread | None = None
         self._root:     FileNode | None      = None
+
+        # Drive dropdown popup
+        self._drive_dropdown = DriveDropdown(self)
 
         # Lazy loading state for top-files table
         self._pending_top:    list = []
@@ -92,7 +244,7 @@ class MainWindow(QMainWindow):
 
         # Path breadcrumb bar
         path_bar = QHBoxLayout()
-        self._path_label = QLabel("—")
+        self._path_label = QLabel("")
         self._path_label.setStyleSheet(f"color: {CP_CYAN}; font-weight: bold;")
         self._path_label.setMinimumWidth(0)
         self._path_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
@@ -135,51 +287,84 @@ class MainWindow(QMainWindow):
 
     def _build_toolbar(self) -> QHBoxLayout:
         bar = QHBoxLayout()
-        bar.setSpacing(6)
+        bar.setSpacing(4)
+        bar.setContentsMargins(0, 0, 0, 0)
 
-        bar.addWidget(QLabel("PATH:"))
+        # Shared button style helper
+        def _btn(text, color, bg, hover_bg="#1a1a1a", fixed_w=None) -> QPushButton:
+            b = QPushButton(text)
+            b.setFixedHeight(30)
+            if fixed_w:
+                b.setFixedWidth(fixed_w)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setStyleSheet(
+                f"QPushButton {{"
+                f"  background-color: {bg};"
+                f"  border: 1px solid {color};"
+                f"  color: {color};"
+                f"  font-family: 'Consolas';"
+                f"  font-weight: bold;"
+                f"  font-size: 9pt;"
+                f"  padding: 0px 14px;"
+                f"}}"
+                f"QPushButton:hover {{"
+                f"  background-color: {color};"
+                f"  color: #000000;"
+                f"}}"
+                f"QPushButton:pressed {{"
+                f"  background-color: {color};"
+                f"  color: #000000;"
+                f"}}"
+                f"QPushButton:disabled {{"
+                f"  background-color: #0d0d0d;"
+                f"  border: 1px solid #2a2a2a;"
+                f"  color: #2a2a2a;"
+                f"}}"
+            )
+            return b
+
+        # PATH label
+        lbl = QLabel("PATH")
+        lbl.setStyleSheet(f"color: {CP_SUBTEXT}; font-weight: bold; font-size: 9pt; padding: 0 4px;")
+        lbl.setFixedHeight(30)
+        bar.addWidget(lbl)
+
+        # Path input — shows drive dropdown on click
         self._path_edit = QLineEdit()
         self._path_edit.setPlaceholderText("C:\\  or  D:\\Projects\\...")
+        self._path_edit.setFixedHeight(30)
         self._path_edit.returnPressed.connect(self._start_scan)
+        self._path_edit.mousePressEvent = self._path_edit_clicked
         bar.addWidget(self._path_edit)
 
-        btn_browse = QPushButton("📂  BROWSE")
+        bar.addSpacing(4)
+
+        btn_browse = _btn("BROWSE", CP_DIM, "#1a1a1a", fixed_w=90)
         btn_browse.clicked.connect(self._browse)
         bar.addWidget(btn_browse)
 
-        self._scan_btn = QPushButton("⚡  SCAN")
-        self._scan_btn.setStyleSheet(
-            f"QPushButton {{ background-color: #003a00; border: 1px solid {CP_GREEN}; "
-            f"color: {CP_GREEN}; font-weight: bold; padding: 6px 16px; }}"
-            f"QPushButton:hover {{ background-color: {CP_GREEN}; color: #000; }}"
-        )
+        self._scan_btn = _btn("SCAN", CP_GREEN, "#001a00", fixed_w=90)
         self._scan_btn.clicked.connect(self._start_scan)
         bar.addWidget(self._scan_btn)
 
-        self._abort_btn = QPushButton("✖  ABORT")
+        self._abort_btn = _btn("ABORT", CP_RED, "#1a0000", fixed_w=90)
         self._abort_btn.setEnabled(False)
-        self._abort_btn.setStyleSheet(
-            f"QPushButton {{ background-color: #3a0000; border: 1px solid {CP_RED}; "
-            f"color: {CP_RED}; font-weight: bold; padding: 6px 16px; }}"
-            f"QPushButton:hover {{ background-color: {CP_RED}; color: #000; }}"
-            f"QPushButton:disabled {{ background-color: #1a0000; border: 1px solid #3a0000; color: #3a0000; }}"
-        )
         self._abort_btn.clicked.connect(self._abort_scan)
         bar.addWidget(self._abort_btn)
 
-        bar.addSpacing(10)
+        bar.addSpacing(8)
 
-        btn_export = QPushButton("📤  EXPORT CSV")
+        btn_export = _btn("EXPORT CSV", CP_CYAN, "#001a1a", fixed_w=110)
         btn_export.clicked.connect(self._export_csv)
         bar.addWidget(btn_export)
 
         bar.addStretch()
 
-        btn_settings = QPushButton("⚙  SETTINGS")
+        btn_settings = _btn("SETTINGS", CP_DIM, "#1a1a1a", fixed_w=100)
         btn_settings.clicked.connect(self._open_settings)
         bar.addWidget(btn_settings)
 
-        btn_restart = QPushButton("↺  RESTART")
+        btn_restart = _btn("RESTART", CP_YELLOW, "#1a1a00", fixed_w=90)
         btn_restart.clicked.connect(self._restart)
         bar.addWidget(btn_restart)
 
@@ -189,6 +374,19 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(get_global_stylesheet())
 
     # ── Scan ─────────────────────────────────────────────────────────────────
+
+    def _path_edit_clicked(self, event):
+        """Show drive dropdown when user clicks the path field."""
+        QLineEdit.mousePressEvent(self._path_edit, event)
+        # Only show if field is empty or contains just a drive letter
+        text = self._path_edit.text().strip()
+        if len(text) <= 3:
+            self._drive_dropdown.show_below(self._path_edit, self._select_drive)
+
+    def _select_drive(self, drive: str):
+        """Called when user picks a drive from the dropdown."""
+        self._path_edit.setText(drive)
+        self._path_edit.setFocus()
 
     def _browse(self):
         path = QFileDialog.getExistingDirectory(self, "Select Directory to Scan")

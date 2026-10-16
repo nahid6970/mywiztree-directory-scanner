@@ -290,9 +290,6 @@ class TreeFileView(QWidget):
         self._filter_edit.setPlaceholderText("filename or extension…")
         self._filter_edit.textChanged.connect(self._apply_filter)
         bar.addWidget(self._filter_edit)
-        self._count_label = QLabel("—")
-        self._count_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        bar.addWidget(self._count_label)
         layout.addLayout(bar)
 
         # Model + proxy
@@ -348,12 +345,9 @@ class TreeFileView(QWidget):
         # Expand root's immediate children so it doesn't look empty
         root_idx = self._proxy.mapFromSource(self._model.index(0, 0, QModelIndex()))
         self._tree.expand(self._proxy.index(0, 0, QModelIndex()))
-        count = len(root.children)
-        self._count_label.setText(f"{count} items at root")
 
     def clear(self):
         self._model.clear()
-        self._count_label.setText("—")
 
     # ── Internals ────────────────────────────────────────────────────────────
 

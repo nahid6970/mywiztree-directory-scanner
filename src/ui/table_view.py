@@ -147,11 +147,6 @@ class TableView(QWidget):
         self._filter_edit.setPlaceholderText("filename or extension…")
         self._filter_edit.textChanged.connect(self._apply_filter)
         bar.addWidget(self._filter_edit)
-
-        self._count_label = QLabel("0 items")
-        self._count_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        bar.addWidget(self._count_label)
-
         layout.addLayout(bar)
 
         # Table
@@ -187,29 +182,21 @@ class TableView(QWidget):
         self._root = root
         nodes = build_flat_list(root)
         self._model.set_nodes(nodes)
-        self._update_count()
 
     def set_nodes(self, nodes: list[FileNode]):
         self._model.set_nodes(nodes)
-        self._update_count()
 
     def append_nodes(self, nodes: list[FileNode]):
         """Append additional nodes — used for lazy chunked loading."""
         self._model.append_nodes(nodes)
-        self._update_count()
 
     def clear(self):
         self._model.set_nodes([])
-        self._update_count()
 
     # ── Internals ────────────────────────────────────────────────────────────
 
     def _apply_filter(self, text: str):
         self._proxy.setFilterFixedString(text)
-        self._update_count()
-
-    def _update_count(self):
-        self._count_label.setText(f"{self._proxy.rowCount()} items")
 
     def _on_click(self, index: QModelIndex):
         src_index = self._proxy.mapToSource(index)
