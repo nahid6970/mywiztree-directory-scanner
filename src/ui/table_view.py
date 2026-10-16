@@ -33,6 +33,16 @@ class FileTableModel(QAbstractTableModel):
         self._nodes = nodes
         self.endResetModel()
 
+    def append_nodes(self, nodes: list[FileNode]):
+        """Incrementally add rows without full reset — keeps UI responsive."""
+        if not nodes:
+            return
+        first = len(self._nodes)
+        last  = first + len(nodes) - 1
+        self.beginInsertRows(QModelIndex(), first, last)
+        self._nodes.extend(nodes)
+        self.endInsertRows()
+
     def rowCount(self, parent=QModelIndex()):
         return len(self._nodes)
 
@@ -181,6 +191,11 @@ class TableView(QWidget):
 
     def set_nodes(self, nodes: list[FileNode]):
         self._model.set_nodes(nodes)
+        self._update_count()
+
+    def append_nodes(self, nodes: list[FileNode]):
+        """Append additional nodes — used for lazy chunked loading."""
+        self._model.append_nodes(nodes)
         self._update_count()
 
     def clear(self):

@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui  import QFont
 
-from src.scanner   import ScannerThread, FileNode, format_size, get_top_files
+from src.scanner   import ScannerThread, ScanResult, FileNode, format_size
 from src.treemap   import TreemapWidget
 from src.theme     import (
     CP_BG, CP_PANEL, CP_CYAN, CP_YELLOW, CP_RED, CP_GREEN,
@@ -34,6 +34,9 @@ DEFAULT_SETTINGS = {
     "treemap_color_mode":  "ext",
 }
 
+# How many table rows to load per QTimer tick (keeps UI responsive)
+CHUNK_SIZE = 2000
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -41,10 +44,16 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("myWizTree  ⚡  CYBERPUNK DISK SCANNER")
         self.resize(1400, 860)
 
-        self._settings   = DEFAULT_SETTINGS.copy()
-        self._scanner:   ScannerThread | None = None
-        self._root:      FileNode | None      = None
-        self._scan_start = 0.0
+        self._settings  = DEFAULT_SETTINGS.copy()
+        self._scanner:  ScannerThread | None = None
+        self._root:     FileNode | None      = None
+
+        # Lazy table loading state
+        self._pending_flat:  list = []
+        self._pending_offset: int = 0
+        self._load_timer = QTimer(self)
+        self._load_timer.setInterval(0)   # fire as fast as event loop allows
+        self._load_timer.timeout.connect(self._load_chunk)
 
         self._build_ui()
         self._apply_theme()
@@ -58,10 +67,9 @@ class MainWindow(QMainWindow):
         root_layout.setContentsMargins(6, 6, 6, 4)
         root_layout.setSpacing(4)
 
-        # ── Top toolbar ──────────────────────────────────────────────────────
         root_layout.addLayout(self._build_toolbar())
 
-        # ── Scan feed strip (live progress) ──────────────────────────────────
+        # Scan feed strip
         self._feed_label = QLabel("READY — choose a directory to scan")
         self._feed_label.setStyleSheet(f"color: {CP_SUBTEXT}; font-size: 9pt;")
         self._feed_label.setMaximumHeight(18)
@@ -69,14 +77,14 @@ class MainWindow(QMainWindow):
         self._feed_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         root_layout.addWidget(self._feed_label)
 
-        # ── Progress bar ─────────────────────────────────────────────────────
+        # Progress bar
         self._progress = QProgressBar()
         self._progress.setRange(0, 0)
         self._progress.setVisible(False)
         self._progress.setMaximumHeight(6)
         root_layout.addWidget(self._progress)
 
-        # ── Main content splitter ─────────────────────────────────────────────
+        # Main splitter
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
         # Left: treemap
@@ -114,38 +122,32 @@ class MainWindow(QMainWindow):
 
         splitter.addWidget(left)
 
-        # Right: tab panel
+        # Right: tabs
         self._tabs = QTabWidget()
-        self._tabs.setTabPosition(QTabWidget.TabPosition.North)
-
         self._table_view = TableView()
         self._table_view.row_selected.connect(self._on_row_selected)
-
         self._top_files_view = TableView()
+        self._ext_panel      = ExtBreakdownPanel()
+        self._diff_view      = DiffView()
 
-        self._ext_panel = ExtBreakdownPanel()
-
-        self._diff_view = DiffView()
-
-        self._tabs.addTab(self._table_view,    "📋  FILES")
+        self._tabs.addTab(self._table_view,     "📋  FILES")
         self._tabs.addTab(self._top_files_view, "🏆  TOP FILES")
-        self._tabs.addTab(self._ext_panel,      "📊  EXTENSIONS")
-        self._tabs.addTab(self._diff_view,      "🔍  SNAPSHOT DIFF")
+        self._tabs.addTab(self._ext_panel,       "📊  EXTENSIONS")
+        self._tabs.addTab(self._diff_view,       "🔍  SNAPSHOT DIFF")
 
         splitter.addWidget(self._tabs)
         splitter.setSizes([600, 780])
-
         root_layout.addWidget(splitter)
 
-        # ── Status bar ───────────────────────────────────────────────────────
+        # Status bar
         self._status = QStatusBar()
         self.setStatusBar(self._status)
         self._status_label = QLabel("READY")
         self._status_label.setMinimumWidth(0)
         self._status_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        self._status.addWidget(self._status_label, 1)   # stretch=1, takes all spare space
+        self._status.addWidget(self._status_label, 1)
         self._stats_label = QLabel("")
-        self._stats_label.setFixedWidth(220)
+        self._stats_label.setFixedWidth(240)
         self._stats_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self._status.addPermanentWidget(self._stats_label)
 
@@ -153,19 +155,16 @@ class MainWindow(QMainWindow):
         bar = QHBoxLayout()
         bar.setSpacing(6)
 
-        # Path input
         bar.addWidget(QLabel("PATH:"))
         self._path_edit = QLineEdit()
         self._path_edit.setPlaceholderText("C:\\  or  D:\\Projects\\...")
         self._path_edit.returnPressed.connect(self._start_scan)
         bar.addWidget(self._path_edit)
 
-        # Browse
         btn_browse = QPushButton("📂  BROWSE")
         btn_browse.clicked.connect(self._browse)
         bar.addWidget(btn_browse)
 
-        # Scan
         self._scan_btn = QPushButton("⚡  SCAN")
         self._scan_btn.setStyleSheet(
             f"QPushButton {{ background-color: #003a00; border: 1px solid {CP_GREEN}; "
@@ -175,7 +174,6 @@ class MainWindow(QMainWindow):
         self._scan_btn.clicked.connect(self._start_scan)
         bar.addWidget(self._scan_btn)
 
-        # Abort
         self._abort_btn = QPushButton("✖  ABORT")
         self._abort_btn.setEnabled(False)
         self._abort_btn.setStyleSheet(
@@ -189,14 +187,12 @@ class MainWindow(QMainWindow):
 
         bar.addSpacing(10)
 
-        # Export
         btn_export = QPushButton("📤  EXPORT CSV")
         btn_export.clicked.connect(self._export_csv)
         bar.addWidget(btn_export)
 
         bar.addStretch()
 
-        # Settings / Restart
         btn_settings = QPushButton("⚙  SETTINGS")
         btn_settings.clicked.connect(self._open_settings)
         bar.addWidget(btn_settings)
@@ -226,33 +222,33 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "INVALID PATH", f"Not a valid directory:\n{path}")
             return
 
+        # Stop any in-progress scan or lazy-load
+        self._load_timer.stop()
         if self._scanner and self._scanner.isRunning():
             self._scanner.abort()
             self._scanner.wait()
 
         self._root = None
+        self._pending_flat   = []
+        self._pending_offset = 0
         self._table_view.clear()
-        self._treemap.set_root(FileNode(
-            name=os.path.basename(path) or path, path=path,
-            size=0, is_dir=True, modified=0,
-            file_count=0, children=[], parent=None,
-        ))
 
         self._scan_btn.setEnabled(False)
         self._abort_btn.setEnabled(True)
         self._progress.setVisible(True)
-        self._scan_start = time.time()
         self._feed_label.setStyleSheet(f"color: {CP_CYAN}; font-size: 9pt;")
+        self._feed_label.setText("  Scanning…")
         self._status_label.setText("SCANNING…")
 
-        self._scanner = ScannerThread(path)
-        self._scanner.progress.connect(self._on_progress)
-        self._scanner.scan_complete.connect(self._on_scan_complete)
-        self._scanner.scan_error.connect(self._on_scan_error)
-        self._scanner.stats_update.connect(self._on_stats_update)
+        self._scanner = ScannerThread(path, top_n=self._settings["top_n"])
+        self._scanner.progress.connect(self._on_progress, Qt.ConnectionType.QueuedConnection)
+        self._scanner.scan_complete.connect(self._on_scan_complete, Qt.ConnectionType.QueuedConnection)
+        self._scanner.scan_error.connect(self._on_scan_error, Qt.ConnectionType.QueuedConnection)
+        self._scanner.stats_update.connect(self._on_stats_update, Qt.ConnectionType.QueuedConnection)
         self._scanner.start()
 
     def _abort_scan(self):
+        self._load_timer.stop()
         if self._scanner:
             self._scanner.abort()
         self._scan_btn.setEnabled(True)
@@ -262,57 +258,91 @@ class MainWindow(QMainWindow):
 
     # ── Scanner signals ───────────────────────────────────────────────────────
 
-    _progress_counter = 0
-
     def _on_progress(self, path: str):
-        self._progress_counter += 1
-        if self._progress_counter % 200 == 0:
-            self._feed_label.setText(f"  {path}")
+        self._feed_label.setText(f"  {path}")
 
     def _on_stats_update(self, files: int, dirs: int):
         self._stats_label.setText(f"Files: {files:,}   Dirs: {dirs:,}")
 
-    def _on_scan_complete(self, root: FileNode):
-        self._root = root
-        elapsed = time.time() - self._scan_start
+    def _on_scan_complete(self, result: ScanResult):
+        """
+        Receives pre-computed ScanResult from worker thread.
+        All heavy work (flat list, top files, ext breakdown) is already done.
+        We just wire the data to each panel — table is loaded lazily in chunks.
+        """
+        self._root = result.root
 
         self._scan_btn.setEnabled(True)
         self._abort_btn.setEnabled(False)
         self._progress.setVisible(False)
+
         self._feed_label.setText(
-            f"  Scan complete  │  {root.file_count:,} files  │  "
-            f"{format_size(root.size)}  │  {elapsed:.1f}s"
+            f"  Scan complete  │  {result.root.file_count:,} files  │  "
+            f"{format_size(result.root.size)}  │  {result.elapsed:.1f}s"
         )
         self._feed_label.setStyleSheet(f"color: {CP_GREEN}; font-size: 9pt;")
         self._status_label.setText("COMPLETE")
-        self._set_path_label(root.path)
+        self._stats_label.setText(
+            f"Files: {result.root.file_count:,}   Dirs: {len([n for n in result.flat_list if n.is_dir]):,}"
+        )
+        self._set_path_label(result.root.path)
 
-        # Populate panels
-        self._treemap.set_root(root)
+        # Treemap — fast, just stores the root reference
+        self._treemap.set_root(result.root)
         self._treemap.set_color_mode(self._settings["treemap_color_mode"])
-        self._table_view.set_root(root)
-        self._top_files_view.set_nodes(get_top_files(root, self._settings["top_n"]))
-        self._ext_panel.set_root(root)
-        self._diff_view.set_current_root(root)
-        self._diff_view.refresh_snapshot_list()
         self._nav_up_btn.setEnabled(False)
 
+        # Top files + extensions — pre-computed, fast to hand off
+        self._top_files_view.set_nodes(result.top_files)
+        self._ext_panel.set_data(result.ext_map, result.root.size)
+
+        # Snapshot diff
+        self._diff_view.set_current_root(result.root)
+        self._diff_view.refresh_snapshot_list()
+
+        # Files table — load lazily in chunks to avoid freezing the UI
+        self._pending_flat   = result.flat_list
+        self._pending_offset = 0
+        # Load first chunk immediately so table feels instant
+        self._load_chunk()
+        # Then continue in the background
+        if self._pending_offset < len(self._pending_flat):
+            self._load_timer.start()
+
+    def _load_chunk(self):
+        """Load the next CHUNK_SIZE rows into the files table."""
+        chunk = self._pending_flat[self._pending_offset:self._pending_offset + CHUNK_SIZE]
+        if not chunk:
+            self._load_timer.stop()
+            return
+
+        self._pending_offset += CHUNK_SIZE
+        self._table_view.append_nodes(chunk)
+
+        loaded = min(self._pending_offset, len(self._pending_flat))
+        total  = len(self._pending_flat)
+        self._status_label.setText(f"Loading table…  {loaded:,} / {total:,}")
+
+        if self._pending_offset >= total:
+            self._load_timer.stop()
+            self._status_label.setText("COMPLETE")
+
     def _on_scan_error(self, msg: str):
+        self._load_timer.stop()
         self._scan_btn.setEnabled(True)
         self._abort_btn.setEnabled(False)
         self._progress.setVisible(False)
         self._status_label.setText("ERROR")
         QMessageBox.critical(self, "SCAN ERROR", msg)
 
-    # ── Treemap navigation ───────────────────────────────────────────────────
+    # ── Treemap navigation ────────────────────────────────────────────────────
 
     def _set_path_label(self, path: str):
-        """Set path label with elided text so long paths never expand the window."""
-        fm = self._path_label.fontMetrics()
+        fm        = self._path_label.fontMetrics()
         available = self._path_label.width() or 400
-        elided = fm.elidedText(path, Qt.TextElideMode.ElideMiddle, available)
+        elided    = fm.elidedText(path, Qt.TextElideMode.ElideMiddle, available)
         self._path_label.setText(elided)
-        self._path_label.setToolTip(path)  # full path on hover
+        self._path_label.setToolTip(path)
 
     def _on_treemap_click(self, node: FileNode):
         self._set_path_label(node.path)
@@ -326,7 +356,7 @@ class MainWindow(QMainWindow):
         self._nav_up_btn.setEnabled(bool(self._treemap._nav_stack))
 
     def _toggle_color_mode(self):
-        current = self._settings["treemap_color_mode"]
+        current  = self._settings["treemap_color_mode"]
         new_mode = "age" if current == "ext" else "ext"
         self._settings["treemap_color_mode"] = new_mode
         self._treemap.set_color_mode(new_mode)
@@ -339,9 +369,7 @@ class MainWindow(QMainWindow):
 
     def _on_row_selected(self, node: FileNode):
         self._set_path_label(node.path)
-        self._status_label.setText(
-            f"{node.path}   │   {format_size(node.size)}"
-        )
+        self._status_label.setText(f"{node.path}   │   {format_size(node.size)}")
 
     # ── Export ───────────────────────────────────────────────────────────────
 
@@ -387,14 +415,16 @@ class MainWindow(QMainWindow):
     # ── Restart ──────────────────────────────────────────────────────────────
 
     def _restart(self):
+        self._load_timer.stop()
         if self._scanner and self._scanner.isRunning():
             self._scanner.abort()
             self._scanner.wait()
         os.execv(sys.executable, [sys.executable] + sys.argv)
 
-    # ── Close ─────────────────────────────────────────────────────────────────
+    # ── Close ────────────────────────────────────────────────────────────────
 
     def closeEvent(self, event):
+        self._load_timer.stop()
         if self._scanner and self._scanner.isRunning():
             self._scanner.abort()
             self._scanner.wait()

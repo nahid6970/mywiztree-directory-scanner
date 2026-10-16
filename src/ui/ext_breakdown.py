@@ -168,3 +168,11 @@ class ExtBreakdownPanel(QWidget):
         self._total_label.setText(
             f"{len(breakdown)} types  │  {format_size(total)} total"
         )
+
+    def set_data(self, breakdown: dict, total_size: int = 0):
+        """Accept pre-computed breakdown dict (avoids re-traversing the tree)."""
+        self._model.set_data(breakdown)
+        total = total_size or sum(v["size"] for v in breakdown.values())
+        self._total_label.setText(
+            f"{len(breakdown)} types  │  {format_size(total)} total"
+        )
