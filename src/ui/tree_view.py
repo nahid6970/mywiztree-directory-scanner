@@ -162,6 +162,10 @@ class FileTreeModel(QAbstractItemModel):
                 f.setBold(True)
             return f
 
+        elif role == Qt.ItemDataRole.TextAlignmentRole:
+            if col != COL_NAME:
+                return int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
         elif role == Qt.ItemDataRole.UserRole:
             # Raw value for sorting
             if col == COL_SIZE:  return node.size
@@ -185,6 +189,9 @@ class FileTreeModel(QAbstractItemModel):
                    role: int = Qt.ItemDataRole.DisplayRole):
         if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
             return COLUMNS[section]
+        if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.TextAlignmentRole:
+            if section != COL_NAME:
+                return int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         return None
 
     # ── Helpers ──────────────────────────────────────────────────────────────
@@ -355,6 +362,7 @@ class TreeFileView(QWidget):
 
         # Column widths
         hdr = self._tree.header()
+        hdr.setStretchLastSection(False)
         hdr.setSectionResizeMode(COL_NAME,  QHeaderView.ResizeMode.Stretch)
         hdr.setSectionResizeMode(COL_SIZE,  QHeaderView.ResizeMode.Fixed)
         hdr.setSectionResizeMode(COL_BAR,   QHeaderView.ResizeMode.Fixed)
