@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
     QPushButton, QLabel, QLineEdit, QTabWidget, QFileDialog,
     QInputDialog, QMessageBox, QStatusBar, QProgressBar,
-    QGroupBox,
+    QGroupBox, QSizePolicy,
 )
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui  import QFont
@@ -65,6 +65,8 @@ class MainWindow(QMainWindow):
         self._feed_label = QLabel("READY — choose a directory to scan")
         self._feed_label.setStyleSheet(f"color: {CP_SUBTEXT}; font-size: 9pt;")
         self._feed_label.setMaximumHeight(18)
+        self._feed_label.setMinimumWidth(0)
+        self._feed_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         root_layout.addWidget(self._feed_label)
 
         # ── Progress bar ─────────────────────────────────────────────────────
@@ -86,8 +88,10 @@ class MainWindow(QMainWindow):
         map_header = QHBoxLayout()
         self._path_label = QLabel("—")
         self._path_label.setStyleSheet(f"color: {CP_CYAN}; font-weight: bold;")
-        map_header.addWidget(self._path_label)
-        map_header.addStretch()
+        self._path_label.setMinimumWidth(0)
+        self._path_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self._path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        map_header.addWidget(self._path_label, stretch=1)
 
         self._nav_up_btn = QPushButton("▲ UP")
         self._nav_up_btn.setFixedWidth(64)
@@ -137,9 +141,13 @@ class MainWindow(QMainWindow):
         self._status = QStatusBar()
         self.setStatusBar(self._status)
         self._status_label = QLabel("READY")
-        self._status.addPermanentWidget(self._status_label)
+        self._status_label.setMinimumWidth(0)
+        self._status_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self._status.addWidget(self._status_label, 1)   # stretch=1, takes all spare space
         self._stats_label = QLabel("")
-        self._status.addWidget(self._stats_label)
+        self._stats_label.setFixedWidth(220)
+        self._stats_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self._status.addPermanentWidget(self._stats_label)
 
     def _build_toolbar(self) -> QHBoxLayout:
         bar = QHBoxLayout()
@@ -277,7 +285,7 @@ class MainWindow(QMainWindow):
         )
         self._feed_label.setStyleSheet(f"color: {CP_GREEN}; font-size: 9pt;")
         self._status_label.setText("COMPLETE")
-        self._path_label.setText(root.path)
+        self._set_path_label(root.path)
 
         # Populate panels
         self._treemap.set_root(root)
@@ -298,15 +306,23 @@ class MainWindow(QMainWindow):
 
     # ── Treemap navigation ───────────────────────────────────────────────────
 
+    def _set_path_label(self, path: str):
+        """Set path label with elided text so long paths never expand the window."""
+        fm = self._path_label.fontMetrics()
+        available = self._path_label.width() or 400
+        elided = fm.elidedText(path, Qt.TextElideMode.ElideMiddle, available)
+        self._path_label.setText(elided)
+        self._path_label.setToolTip(path)  # full path on hover
+
     def _on_treemap_click(self, node: FileNode):
-        self._path_label.setText(node.path)
+        self._set_path_label(node.path)
         self._nav_up_btn.setEnabled(bool(self._treemap._nav_stack))
 
     def _treemap_up(self):
         self._treemap.navigate_up()
         current = self._treemap.current_node()
         if current:
-            self._path_label.setText(current.path)
+            self._set_path_label(current.path)
         self._nav_up_btn.setEnabled(bool(self._treemap._nav_stack))
 
     def _toggle_color_mode(self):
@@ -322,7 +338,7 @@ class MainWindow(QMainWindow):
         )
 
     def _on_row_selected(self, node: FileNode):
-        self._path_label.setText(node.path)
+        self._set_path_label(node.path)
         self._status_label.setText(
             f"{node.path}   │   {format_size(node.size)}"
         )
