@@ -49,16 +49,38 @@ class FileTreeModel(QAbstractItemModel):
     def __init__(self, root: FileNode | None = None, parent=None):
         super().__init__(parent)
         self._root: FileNode | None = root
+        self._focus_node: FileNode | None = None
 
     def set_root(self, root: FileNode):
         self.beginResetModel()
         self._root = root
+        self._focus_node = None
         self.endResetModel()
 
     def clear(self):
         self.beginResetModel()
         self._root = None
+        self._focus_node = None
         self.endResetModel()
+
+    def set_focus_node(self, node: FileNode | None):
+        self._focus_node = node
+
+    def _is_in_focus_branch(self, node: FileNode) -> bool:
+        focus = self._focus_node
+        if focus is None:
+            return True
+        current = node
+        while current is not None:
+            if current is focus:
+                return True
+            current = current.parent
+        current = focus
+        while current is not None:
+            if current is node:
+                return True
+            current = current.parent
+        return False
 
     # ── Required overrides ───────────────────────────────────────────────────
 
@@ -143,6 +165,8 @@ class FileTreeModel(QAbstractItemModel):
                 return None
 
         elif role == Qt.ItemDataRole.ForegroundRole:
+            if not self._is_in_focus_branch(node):
+                return QColor(CP_DIM)
             if col == COL_NAME:
                 if not node.is_dir and node.change_status == "NEW":
                     return QColor(CP_GREEN)
@@ -238,6 +262,10 @@ class SizeBarDelegate(QStyledItemDelegate):
         else:
             painter.fillRect(rect, QColor(CP_PANEL if rect.top() % 2 == 0 else "#161616"))
 
+        dimmed = index.data(Qt.ItemDataRole.ForegroundRole) == QColor(CP_DIM)
+        bar_color = QColor("#303030") if dimmed else self.BAR_COLOR
+        border_color = QColor("#555555") if dimmed else self.BAR_BORDER
+        text_color = QColor("#666666") if dimmed else self.TEXT_COLOR
         pct: float = index.data(Qt.ItemDataRole.UserRole) or 0.0
         pct = max(0.0, min(1.0, pct))
 
@@ -250,12 +278,12 @@ class SizeBarDelegate(QStyledItemDelegate):
                 max(2, int((rect.width() - padding * 2) * pct)),
                 rect.height() - padding * 2,
             )
-            painter.fillRect(bar_rect, self.BAR_COLOR)
-            painter.setPen(QPen(self.BAR_BORDER, 1))
+            painter.fillRect(bar_rect, bar_color)
+            painter.setPen(QPen(border_color, 1))
             painter.drawRect(bar_rect)
 
         # Percentage text
-        painter.setPen(self.TEXT_COLOR)
+        painter.setPen(text_color)
         painter.setFont(QFont("Consolas", 8))
         pct_text = f"{pct * 100:.1f}%"
         painter.drawText(
@@ -389,6 +417,8 @@ class TreeFileView(QWidget):
         self._tree.setStyleSheet("QTreeView::item { height: 22px; }")
 
         self._tree.clicked.connect(self._on_click)
+        self._tree.expanded.connect(self._on_expand_focus)
+        self._tree.collapsed.connect(self._on_expand_focus)
         self._tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._tree.customContextMenuRequested.connect(self._context_menu)
 
@@ -409,6 +439,13 @@ class TreeFileView(QWidget):
     def set_visible_columns(self, visible: set[int]):
         for column in range(len(COLUMNS)):
             self._tree.setColumnHidden(column, column != COL_NAME and column not in visible)
+
+    def _on_expand_focus(self, proxy_index: QModelIndex):
+        source_index = self._proxy.mapToSource(proxy_index)
+        node = self._model.get_node(source_index)
+        if node and node.is_dir:
+            self._model.set_focus_node(node)
+            self._tree.viewport().update()
 
     # ── Internals ────────────────────────────────────────────────────────────
 
