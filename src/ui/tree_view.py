@@ -160,11 +160,11 @@ class FileTreeModel(QAbstractItemModel):
                 return None
 
         elif role == Qt.ItemDataRole.ForegroundRole:
+            if node is self._focus_node:
+                return QColor(CP_DIM)
             if not self._is_in_focus_branch(node):
                 return QColor(CP_DIM)
             if col == COL_NAME:
-                if node is self._focus_node:
-                    return QColor("#ff5fd7")
                 if not node.is_dir and node.change_status == "NEW":
                     return QColor(CP_GREEN)
                 if not node.is_dir and node.change_status == "DELETED":
