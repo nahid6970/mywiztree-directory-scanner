@@ -12,6 +12,7 @@ import os
 import stat
 import time
 import threading
+import fnmatch
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Optional
@@ -45,6 +46,29 @@ def _entry_is_directory(entry: os.DirEntry, is_reparse: bool) -> bool:
         return entry.is_dir(follow_symlinks=is_reparse)
     except OSError:
         return False
+
+
+def _is_excluded(path: str, root_path: str, patterns: tuple[str, ...],
+                 is_directory: bool = False) -> bool:
+    if not patterns:
+        return False
+    relative = os.path.relpath(path, root_path).replace("\\", "/").casefold()
+    name = os.path.basename(path).casefold()
+    path_candidates = ["/".join(relative.split("/")[index:])
+                       for index in range(len(relative.split("/")))]
+    for pattern in patterns:
+        normalized_pattern = pattern.replace("\\", "/").casefold()
+        if (fnmatch.fnmatchcase(name, normalized_pattern)
+                or any(fnmatch.fnmatchcase(candidate, normalized_pattern)
+                       for candidate in path_candidates)):
+            return True
+        # A contents pattern such as "node_modules/*" should prune the
+        # node_modules directory itself before scandir enters it.
+        if is_directory and any(fnmatch.fnmatchcase(
+                candidate + "/__excluded_child__", normalized_pattern)
+                for candidate in path_candidates):
+            return True
+    return False
 
 
 @dataclass
@@ -127,7 +151,9 @@ def _scan_dir(path: str,
               dir_entry: Optional[os.DirEntry] = None,
               follow_dir_symlinks: bool = False,
               ancestor_paths: frozenset[str] = frozenset(),
-              is_link: bool = False) -> FileNode:
+              is_link: bool = False,
+              exclude_patterns: tuple[str, ...] = (),
+              scan_root_path: str | None = None) -> FileNode:
     """
     Recursively scan a directory.
     Thread-safe: each call owns its own node; counters use a lock.
@@ -166,6 +192,9 @@ def _scan_dir(path: str,
             st = entry.stat(follow_symlinks=False)
             is_reparse = _is_reparse_entry(entry, st)
             is_directory = _entry_is_directory(entry, is_reparse)
+            if _is_excluded(entry.path, scan_root_path or path,
+                            exclude_patterns, is_directory):
+                continue
             can_follow = is_reparse and is_directory and follow_dir_symlinks
             target_identity = os.path.normcase(os.path.realpath(entry.path)) if is_directory else ""
             if is_directory and (not is_reparse or can_follow) and target_identity not in ancestor_paths:
@@ -174,7 +203,9 @@ def _scan_dir(path: str,
                                    progress_cb=progress_cb, dir_entry=entry,
                                    follow_dir_symlinks=follow_dir_symlinks,
                                    ancestor_paths=ancestor_paths | {os.path.normcase(os.path.realpath(path))},
-                                   is_link=is_reparse)
+                                   is_link=is_reparse,
+                                   exclude_patterns=exclude_patterns,
+                                   scan_root_path=scan_root_path or path)
                 node.children.append(child)
                 node.size       += child.size
                 node.file_count += child.file_count
@@ -242,11 +273,13 @@ class ScannerThread(QThread):
     scan_error    = pyqtSignal(str)
 
     def __init__(self, root_path: str, top_n: int = 100, parent=None,
-                 follow_dir_symlinks: bool = False):
+                 follow_dir_symlinks: bool = False,
+                 exclude_patterns: list[str] | None = None):
         super().__init__(parent)
         self.root_path  = root_path
         self.top_n      = top_n
         self.follow_dir_symlinks = follow_dir_symlinks
+        self.exclude_patterns = tuple(p.strip() for p in (exclude_patterns or []) if p.strip())
         self._abort     = [False]   # list so worker threads share the reference
         self._counter   = _Counter()
 
@@ -324,6 +357,8 @@ class ScannerThread(QThread):
             try:
                 is_reparse = _is_reparse_entry(entry)
                 is_directory = _entry_is_directory(entry, is_reparse)
+                if _is_excluded(entry.path, root_path, self.exclude_patterns, is_directory):
+                    continue
                 if is_directory and (not is_reparse or self.follow_dir_symlinks):
                     root_dirs.append(entry)
                 else:
@@ -373,6 +408,8 @@ class ScannerThread(QThread):
                     self.follow_dir_symlinks,
                     frozenset({os.path.normcase(os.path.realpath(root_path))}),
                     _is_reparse_entry(entry),
+                    self.exclude_patterns,
+                    root_path,
                 ): entry
                 for entry in root_dirs
             }

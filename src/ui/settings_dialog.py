@@ -4,7 +4,7 @@
 
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QFormLayout, QGroupBox,
-    QSpinBox, QCheckBox, QDialogButtonBox,
+    QSpinBox, QCheckBox, QDialogButtonBox, QPlainTextEdit,
 )
 
 # Column indices — must match table_view.py
@@ -48,6 +48,12 @@ class SettingsDialog(QDialog):
         self._follow_dir_symlinks = QCheckBox("Follow symlinks (show target size and browse linked folders)")
         self._follow_dir_symlinks.setChecked(self._settings.get("follow_dir_symlinks", False))
         form_scan.addRow("", self._follow_dir_symlinks)
+
+        self._exclude_patterns = QPlainTextEdit()
+        self._exclude_patterns.setPlaceholderText("One glob per line: node_modules, *.tmp, build/cache/*")
+        self._exclude_patterns.setPlainText("\n".join(self._settings.get("exclude_patterns", [])))
+        self._exclude_patterns.setMaximumHeight(78)
+        form_scan.addRow("Exclude patterns:", self._exclude_patterns)
 
         self._dirs_first = QCheckBox("Folders before files")
         self._dirs_first.setChecked(self._settings.get("dirs_first", True))
@@ -127,6 +133,10 @@ class SettingsDialog(QDialog):
         self._settings["top_n"]       = self._top_n.value()
         self._settings["skip_hidden"] = self._skip_hidden.isChecked()
         self._settings["follow_dir_symlinks"] = self._follow_dir_symlinks.isChecked()
+        self._settings["exclude_patterns"] = [
+            line.strip() for line in self._exclude_patterns.toPlainText().splitlines()
+            if line.strip()
+        ]
         self._settings["dirs_first"]  = self._dirs_first.isChecked()
         self._settings["show_tooltips"] = self._show_tooltips.isChecked()
 

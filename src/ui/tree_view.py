@@ -8,7 +8,7 @@ import shutil
 import time
 
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QTreeView, QLineEdit,
+    QWidget, QVBoxLayout, QHBoxLayout, QTreeView, QLineEdit, QCheckBox,
     QLabel, QHeaderView, QAbstractItemView, QMenu, QMessageBox,
     QSizePolicy, QApplication,
 )
@@ -315,10 +315,41 @@ class TreeSortProxy(QSortFilterProxyModel):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._dirs_first = True
+        self._changed_only = False
+        self._changed_visible_nodes: set[int] = set()
 
     def set_dirs_first(self, enabled: bool):
         self._dirs_first = enabled
         self.invalidate()
+
+    def set_changed_only(self, enabled: bool):
+        self._changed_only = enabled
+        self._changed_visible_nodes.clear()
+        if enabled:
+            root = self.sourceModel()._root
+
+            def collect(node: FileNode) -> bool:
+                has_changes = node.change_status not in ("", "UNCHANGED")
+                descendant_changed = False
+                for child in node.children:
+                    descendant_changed = collect(child) or descendant_changed
+                if has_changes or descendant_changed:
+                    self._changed_visible_nodes.add(id(node))
+                    return True
+                return False
+
+            if root:
+                collect(root)
+        self.invalidateFilter()
+
+    def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:
+        if not super().filterAcceptsRow(source_row, source_parent):
+            return False
+        if not self._changed_only:
+            return True
+        source_index = self.sourceModel().index(source_row, COL_NAME, source_parent)
+        node = self.sourceModel().get_node(source_index)
+        return node is not None and id(node) in self._changed_visible_nodes
 
     def lessThan(self, left: QModelIndex, right: QModelIndex) -> bool:
         # Dirs-first: always keep dirs above files regardless of column or direction.
@@ -377,6 +408,10 @@ class TreeFileView(QWidget):
         self._filter_edit.setPlaceholderText("filename or extension…")
         self._filter_edit.textChanged.connect(self._apply_filter)
         bar.addWidget(self._filter_edit)
+        self._changed_only = QCheckBox("Changed only")
+        self._changed_only.setToolTip("Show only changed entries and folders leading to them")
+        self._changed_only.toggled.connect(self._proxy_changed_only)
+        bar.addWidget(self._changed_only)
         layout.addLayout(bar)
 
         # Model + proxy
@@ -440,6 +475,8 @@ class TreeFileView(QWidget):
     def set_root(self, root: FileNode):
         self._root = root
         self._model.set_root(root)
+        if self._changed_only.isChecked():
+            self._proxy.set_changed_only(True)
 
     def clear(self):
         self._model.clear()
@@ -450,6 +487,9 @@ class TreeFileView(QWidget):
     def set_visible_columns(self, visible: set[int]):
         for column in range(len(COLUMNS)):
             self._tree.setColumnHidden(column, column != COL_NAME and column not in visible)
+
+    def _proxy_changed_only(self, enabled: bool):
+        self._proxy.set_changed_only(enabled)
 
     def _on_expand_focus(self, proxy_index: QModelIndex):
         source_index = self._proxy.mapToSource(proxy_index)
