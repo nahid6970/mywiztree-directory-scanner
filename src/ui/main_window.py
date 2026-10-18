@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
     QMessageBox, QStatusBar, QProgressBar, QSizePolicy,
     QListWidget, QListWidgetItem, QFrame, QToolButton, QMenu, QSystemTrayIcon, QStyle,
 )
-from PyQt6.QtCore import Qt, QTimer, QPoint, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, QPoint, QThread, pyqtSignal, QObject, QEvent
 from PyQt6.QtGui  import QFont, QColor
 
 from src.scanner   import ScannerThread, ScanResult, FileNode, format_size
@@ -180,6 +180,17 @@ class DriveDropdown(QFrame):
 CHUNK_SIZE = 2000   # rows loaded per QTimer tick for top-files table
 
 
+class _TooltipFilter(QObject):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.enabled = True
+
+    def eventFilter(self, watched, event):
+        if not self.enabled and event.type() == QEvent.Type.ToolTip:
+            return True
+        return False
+
+
 class SnapshotCompareThread(QThread):
     progress = pyqtSignal(int, int, str)
     completed = pyqtSignal(str)
@@ -232,6 +243,7 @@ class MainWindow(QMainWindow):
         # Apply default sort/column preferences
         self._tree_view.set_dirs_first(self._settings["dirs_first"])
         self._tree_view.set_visible_columns(self._settings["tree_cols"])
+        self._apply_tooltip_setting()
         self._top_files_view.set_visible_columns(self._settings["top_files_cols"])
 
     # ── UI ────────────────────────────────────────────────────────────────────
@@ -419,6 +431,12 @@ class MainWindow(QMainWindow):
 
     def _apply_theme(self):
         self.setStyleSheet(get_global_stylesheet())
+
+    def _apply_tooltip_setting(self):
+        if not hasattr(self, "_tooltip_filter"):
+            self._tooltip_filter = _TooltipFilter(QApplication.instance())
+            QApplication.instance().installEventFilter(self._tooltip_filter)
+        self._tooltip_filter.enabled = self._settings.get("show_tooltips", True)
 
     def _setup_notifications(self):
         self._tray_icon = None
@@ -858,6 +876,7 @@ class MainWindow(QMainWindow):
             save_settings(self._settings)
             self._tree_view.set_dirs_first(self._settings["dirs_first"])
             self._tree_view.set_visible_columns(self._settings["tree_cols"])
+            self._apply_tooltip_setting()
             self._top_files_view.set_visible_columns(self._settings["top_files_cols"])
 
     # ── Restart / Close ──────────────────────────────────────────────────────

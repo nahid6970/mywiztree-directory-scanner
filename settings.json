@@ -2,6 +2,7 @@
   "top_n": 100,
   "skip_hidden": false,
   "dirs_first": true,
+  "show_tooltips": false,
   "top_files_cols": [
     0,
     1

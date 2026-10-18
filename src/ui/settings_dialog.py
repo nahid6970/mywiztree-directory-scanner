@@ -49,6 +49,10 @@ class SettingsDialog(QDialog):
         self._dirs_first.setChecked(self._settings.get("dirs_first", True))
         form_scan.addRow("", self._dirs_first)
 
+        self._show_tooltips = QCheckBox("Show tooltips")
+        self._show_tooltips.setChecked(self._settings.get("show_tooltips", True))
+        form_scan.addRow("", self._show_tooltips)
+
         grp_scan.setLayout(form_scan)
         layout.addWidget(grp_scan)
 
@@ -119,6 +123,7 @@ class SettingsDialog(QDialog):
         self._settings["top_n"]       = self._top_n.value()
         self._settings["skip_hidden"] = self._skip_hidden.isChecked()
         self._settings["dirs_first"]  = self._dirs_first.isChecked()
+        self._settings["show_tooltips"] = self._show_tooltips.isChecked()
 
         cols = {COL_NAME}  # Name always visible
         if self._col_size.isChecked():  cols.add(COL_SIZE)
