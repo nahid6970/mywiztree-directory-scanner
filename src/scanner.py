@@ -9,6 +9,7 @@
 # ============================================================
 
 import os
+import stat
 import time
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -21,6 +22,29 @@ from PyQt6.QtCore import QThread, pyqtSignal
 import os as _os
 _CPU = _os.cpu_count() or 4
 MAX_WORKERS = min(_CPU, 8)
+
+
+def _is_reparse_entry(entry: os.DirEntry, st=None) -> bool:
+    """Identify symbolic links and Windows reparse points without following them."""
+    try:
+        if entry.is_symlink():
+            return True
+    except OSError:
+        return False
+    try:
+        st = st or entry.stat(follow_symlinks=False)
+        reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+        return bool(getattr(st, "st_file_attributes", 0) & reparse_flag)
+    except OSError:
+        return False
+
+
+def _entry_is_directory(entry: os.DirEntry, is_reparse: bool) -> bool:
+    """Get link target type only for display; never recurse into a link."""
+    try:
+        return entry.is_dir(follow_symlinks=is_reparse)
+    except OSError:
+        return False
 
 
 @dataclass
@@ -134,7 +158,10 @@ def _scan_dir(path: str,
         if abort_flag[0]:
             raise InterruptedError()
         try:
-            if entry.is_dir(follow_symlinks=False):
+            st = entry.stat(follow_symlinks=False)
+            is_reparse = _is_reparse_entry(entry, st)
+            is_directory = _entry_is_directory(entry, is_reparse)
+            if is_directory and not is_reparse:
                 child = _scan_dir(entry.path, parent=node,
                                    abort_flag=abort_flag, counter=counter,
                                    progress_cb=progress_cb, dir_entry=entry)
@@ -143,7 +170,6 @@ def _scan_dir(path: str,
                 node.file_count += child.file_count
             else:
                 try:
-                    st    = entry.stat(follow_symlinks=False)
                     fsize = st.st_size
                     fmod  = st.st_mtime
                 except OSError:
@@ -155,20 +181,23 @@ def _scan_dir(path: str,
                     name       = entry.name,
                     path       = entry.path,
                     size       = fsize,
-                    is_dir     = False,
+                    is_dir     = is_directory,
                     modified   = fmod,
-                    file_count = 1,
+                    file_count = 0 if is_directory else 1,
                     children   = [],
                     parent     = node,
                     extension  = ext,
                 )
                 node.children.append(file_node)
                 node.size       += fsize
-                node.file_count += 1
+                node.file_count += file_node.file_count
 
-                fc = counter.add_file()
-                if fc % 500 == 0:
-                    progress_cb(entry.path, counter.files, counter.dirs)
+                if is_directory:
+                    counter.add_dir()
+                else:
+                    fc = counter.add_file()
+                    if fc % 500 == 0:
+                        progress_cb(entry.path, counter.files, counter.dirs)
 
         except (PermissionError, OSError):
             continue
@@ -271,7 +300,8 @@ class ScannerThread(QThread):
         root_dirs  = []
         for entry in root_entries:
             try:
-                if entry.is_dir(follow_symlinks=False):
+                is_reparse = _is_reparse_entry(entry)
+                if _entry_is_directory(entry, is_reparse) and not is_reparse:
                     root_dirs.append(entry)
                 else:
                     root_files.append(entry)
@@ -287,19 +317,25 @@ class ScannerThread(QThread):
                 fsize = st.st_size
                 fmod  = st.st_mtime
             except OSError:
+                st = None
                 fsize = 0
                 fmod  = 0.0
             ext = os.path.splitext(entry.name)[1].lower()
+            is_reparse = _is_reparse_entry(entry, st)
+            is_directory_link = is_reparse and _entry_is_directory(entry, True)
             fn  = FileNode(
                 name=entry.name, path=entry.path,
-                size=fsize, is_dir=False, modified=fmod,
-                file_count=1, children=[], parent=root_node,
+                size=fsize, is_dir=is_directory_link, modified=fmod,
+                file_count=0 if is_directory_link else 1, children=[], parent=root_node,
                 extension=ext,
             )
             root_node.children.append(fn)
             root_node.size       += fsize
-            root_node.file_count += 1
-            counter.add_file()
+            root_node.file_count += fn.file_count
+            if is_directory_link:
+                counter.add_dir()
+            else:
+                counter.add_file()
 
         # Parallelise subdirectory scanning
         self.progress.emit(f"  Scanning with {MAX_WORKERS} threads…")
