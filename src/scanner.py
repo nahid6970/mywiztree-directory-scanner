@@ -63,6 +63,7 @@ class FileNode:
     change_status: str = ""
     change_pct: Optional[float] = None
     change_delta: Optional[int] = None
+    is_link: bool = False
 
     def size_str(self) -> str:
         return format_size(self.size)
@@ -187,6 +188,7 @@ def _scan_dir(path: str,
                     children   = [],
                     parent     = node,
                     extension  = ext,
+                    is_link    = is_reparse,
                 )
                 node.children.append(file_node)
                 node.size       += fsize
@@ -327,7 +329,7 @@ class ScannerThread(QThread):
                 name=entry.name, path=entry.path,
                 size=fsize, is_dir=is_directory_link, modified=fmod,
                 file_count=0 if is_directory_link else 1, children=[], parent=root_node,
-                extension=ext,
+                extension=ext, is_link=is_reparse,
             )
             root_node.children.append(fn)
             root_node.size       += fsize
