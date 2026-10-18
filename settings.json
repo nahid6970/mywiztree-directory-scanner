@@ -5,6 +5,7 @@
   "exclude_patterns": [
     "node_modules/*"
   ],
+  "exclude_enabled": false,
   "dirs_first": true,
   "show_tooltips": false,
   "top_files_cols": [

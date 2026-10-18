@@ -516,7 +516,8 @@ class MainWindow(QMainWindow):
             path,
             top_n=self._settings["top_n"],
             follow_dir_symlinks=self._settings.get("follow_dir_symlinks", False),
-            exclude_patterns=self._settings.get("exclude_patterns", []),
+            exclude_patterns=(self._settings.get("exclude_patterns", [])
+                              if self._settings.get("exclude_enabled", True) else []),
         )
         self._scanner.progress.connect(self._on_progress,       Qt.ConnectionType.QueuedConnection)
         self._scanner.scan_complete.connect(self._on_scan_complete, Qt.ConnectionType.QueuedConnection)

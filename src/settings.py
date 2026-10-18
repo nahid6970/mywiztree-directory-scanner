@@ -12,6 +12,7 @@ DEFAULT_SETTINGS = {
     "skip_hidden":    False,
     "follow_dir_symlinks": False,
     "exclude_patterns": [],
+    "exclude_enabled": True,
     "dirs_first":     True,
     "show_tooltips":  True,
     "top_files_cols": [0, 1, 2, 4, 5],  # Name, Size, %, Modified, Path

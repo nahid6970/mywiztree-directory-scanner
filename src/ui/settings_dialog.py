@@ -49,6 +49,10 @@ class SettingsDialog(QDialog):
         self._follow_dir_symlinks.setChecked(self._settings.get("follow_dir_symlinks", False))
         form_scan.addRow("", self._follow_dir_symlinks)
 
+        self._exclude_enabled = QCheckBox("Enable exclusion patterns")
+        self._exclude_enabled.setChecked(self._settings.get("exclude_enabled", True))
+        form_scan.addRow("", self._exclude_enabled)
+
         self._exclude_patterns = QPlainTextEdit()
         self._exclude_patterns.setPlaceholderText("One glob per line: node_modules, *.tmp, build/cache/*")
         self._exclude_patterns.setPlainText("\n".join(self._settings.get("exclude_patterns", [])))
@@ -137,6 +141,7 @@ class SettingsDialog(QDialog):
             line.strip() for line in self._exclude_patterns.toPlainText().splitlines()
             if line.strip()
         ]
+        self._settings["exclude_enabled"] = self._exclude_enabled.isChecked()
         self._settings["dirs_first"]  = self._dirs_first.isChecked()
         self._settings["show_tooltips"] = self._show_tooltips.isChecked()
 
