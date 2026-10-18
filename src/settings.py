@@ -10,6 +10,7 @@ _SETTINGS_FILE = os.path.join(os.path.dirname(__file__), "..", "settings.json")
 DEFAULT_SETTINGS = {
     "top_n":          100,
     "skip_hidden":    False,
+    "follow_dir_symlinks": False,
     "dirs_first":     True,
     "show_tooltips":  True,
     "top_files_cols": [0, 1, 2, 4, 5],  # Name, Size, %, Modified, Path

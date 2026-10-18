@@ -1,6 +1,7 @@
 {
   "top_n": 100,
   "skip_hidden": false,
+  "follow_dir_symlinks": false,
   "dirs_first": true,
   "show_tooltips": false,
   "top_files_cols": [

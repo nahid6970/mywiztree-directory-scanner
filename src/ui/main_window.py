@@ -512,7 +512,11 @@ class MainWindow(QMainWindow):
         self._feed_label.setText("  Scanning…")
         self._status_label.setText("SCANNING…")
 
-        self._scanner = ScannerThread(path, top_n=self._settings["top_n"])
+        self._scanner = ScannerThread(
+            path,
+            top_n=self._settings["top_n"],
+            follow_dir_symlinks=self._settings.get("follow_dir_symlinks", False),
+        )
         self._scanner.progress.connect(self._on_progress,       Qt.ConnectionType.QueuedConnection)
         self._scanner.scan_complete.connect(self._on_scan_complete, Qt.ConnectionType.QueuedConnection)
         self._scanner.scan_error.connect(self._on_scan_error,   Qt.ConnectionType.QueuedConnection)

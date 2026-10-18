@@ -124,7 +124,10 @@ def _scan_dir(path: str,
               abort_flag: list,          # [False] — set to [True] to abort
               counter: _Counter,
               progress_cb,               # callable(path) — throttled
-              dir_entry: Optional[os.DirEntry] = None) -> FileNode:
+              dir_entry: Optional[os.DirEntry] = None,
+              follow_dir_symlinks: bool = False,
+              ancestor_paths: frozenset[str] = frozenset(),
+              is_link: bool = False) -> FileNode:
     """
     Recursively scan a directory.
     Thread-safe: each call owns its own node; counters use a lock.
@@ -147,6 +150,7 @@ def _scan_dir(path: str,
         file_count = 0,
         children   = [],
         parent     = parent,
+        is_link    = is_link,
     )
     counter.add_dir()
 
@@ -162,17 +166,31 @@ def _scan_dir(path: str,
             st = entry.stat(follow_symlinks=False)
             is_reparse = _is_reparse_entry(entry, st)
             is_directory = _entry_is_directory(entry, is_reparse)
-            if is_directory and not is_reparse:
+            can_follow = is_reparse and is_directory and follow_dir_symlinks
+            target_identity = os.path.normcase(os.path.realpath(entry.path)) if is_directory else ""
+            if is_directory and (not is_reparse or can_follow) and target_identity not in ancestor_paths:
                 child = _scan_dir(entry.path, parent=node,
                                    abort_flag=abort_flag, counter=counter,
-                                   progress_cb=progress_cb, dir_entry=entry)
+                                   progress_cb=progress_cb, dir_entry=entry,
+                                   follow_dir_symlinks=follow_dir_symlinks,
+                                   ancestor_paths=ancestor_paths | {os.path.normcase(os.path.realpath(path))},
+                                   is_link=is_reparse)
                 node.children.append(child)
                 node.size       += child.size
                 node.file_count += child.file_count
+            elif is_directory and can_follow and target_identity in ancestor_paths:
+                # Display cyclic links without recursing back into an ancestor.
+                node.children.append(FileNode(
+                    name=entry.name, path=entry.path, size=0, is_dir=True,
+                    modified=st.st_mtime, file_count=0, children=[], parent=node,
+                    is_link=True,
+                ))
+                counter.add_dir()
             else:
                 try:
-                    fsize = st.st_size
-                    fmod  = st.st_mtime
+                    size_stat = entry.stat(follow_symlinks=follow_dir_symlinks and is_reparse)
+                    fsize = size_stat.st_size
+                    fmod  = size_stat.st_mtime
                 except OSError:
                     fsize = 0
                     fmod  = 0.0
@@ -223,10 +241,12 @@ class ScannerThread(QThread):
     scan_complete = pyqtSignal(object)
     scan_error    = pyqtSignal(str)
 
-    def __init__(self, root_path: str, top_n: int = 100, parent=None):
+    def __init__(self, root_path: str, top_n: int = 100, parent=None,
+                 follow_dir_symlinks: bool = False):
         super().__init__(parent)
         self.root_path  = root_path
         self.top_n      = top_n
+        self.follow_dir_symlinks = follow_dir_symlinks
         self._abort     = [False]   # list so worker threads share the reference
         self._counter   = _Counter()
 
@@ -303,7 +323,8 @@ class ScannerThread(QThread):
         for entry in root_entries:
             try:
                 is_reparse = _is_reparse_entry(entry)
-                if _entry_is_directory(entry, is_reparse) and not is_reparse:
+                is_directory = _entry_is_directory(entry, is_reparse)
+                if is_directory and (not is_reparse or self.follow_dir_symlinks):
                     root_dirs.append(entry)
                 else:
                     root_files.append(entry)
@@ -316,8 +337,10 @@ class ScannerThread(QThread):
                 raise InterruptedError()
             try:
                 st    = entry.stat(follow_symlinks=False)
-                fsize = st.st_size
-                fmod  = st.st_mtime
+                is_reparse = _is_reparse_entry(entry, st)
+                size_stat = entry.stat(follow_symlinks=self.follow_dir_symlinks and is_reparse)
+                fsize = size_stat.st_size
+                fmod  = size_stat.st_mtime
             except OSError:
                 st = None
                 fsize = 0
@@ -346,7 +369,10 @@ class ScannerThread(QThread):
             futures = {
                 pool.submit(
                     _scan_dir, entry.path, root_node,
-                    abort, counter, cb, entry
+                    abort, counter, cb, entry,
+                    self.follow_dir_symlinks,
+                    frozenset({os.path.normcase(os.path.realpath(root_path))}),
+                    _is_reparse_entry(entry),
                 ): entry
                 for entry in root_dirs
             }
