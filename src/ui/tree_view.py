@@ -6,6 +6,7 @@ import os
 import subprocess
 import shutil
 import time
+import math
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTreeView, QLineEdit, QCheckBox,
@@ -36,6 +37,23 @@ COLUMN_CHANGE_PCT = 5
 COLUMN_CHANGE_SIZE = 6
 
 COLUMNS   = ["Name", "Size", "Size Bar", "Files", "Modified", "% Change", "Size Δ"]
+
+
+def _change_magnitude_color(delta: int | float | None) -> QColor:
+    """Show the disk impact through color intensity while hue shows direction."""
+    if delta is None or delta == 0:
+        return QColor(CP_SUBTEXT)
+
+    amount = abs(float(delta))
+    # Log scaling keeps tiny changes distinguishable while still allowing
+    # drive-sized changes to reach a much brighter shade.
+    low = math.log10(1 + 1024)  # 1 KiB
+    high = math.log10(1 + 100 * 1024**3)  # 100 GiB
+    strength = max(0.0, min(1.0, (math.log10(1 + amount) - low) / (high - low)))
+    hue = 120 if delta > 0 else 0
+    saturation = round(65 + 35 * strength)
+    value = round(105 + 150 * strength)
+    return QColor.fromHsv(hue, saturation, value)
 
 
 # ── Item model ────────────────────────────────────────────────────────────────
@@ -179,9 +197,19 @@ class FileTreeModel(QAbstractItemModel):
             if col == COL_MOD:
                 return QColor(CP_SUBTEXT)
             if col == COLUMN_CHANGE_PCT:
-                return QColor(CP_GREEN if node.change_status == "NEW" or (node.change_pct or 0) > 0 else CP_RED if node.change_status == "DELETED" or (node.change_pct or 0) < 0 else CP_SUBTEXT)
+                delta = node.change_delta
+                if delta is None and node.change_status == "NEW":
+                    delta = node.size
+                elif delta is None and node.change_status == "DELETED":
+                    delta = -(node.previous_size or 0)
+                return _change_magnitude_color(delta)
             if col == COLUMN_CHANGE_SIZE:
-                return QColor(CP_GREEN if node.change_status == "NEW" or (node.change_delta or 0) > 0 else CP_RED if node.change_status == "DELETED" or (node.change_delta or 0) < 0 else CP_SUBTEXT)
+                delta = node.change_delta
+                if delta is None and node.change_status == "NEW":
+                    delta = node.size
+                elif delta is None and node.change_status == "DELETED":
+                    delta = -(node.previous_size or 0)
+                return _change_magnitude_color(delta)
 
         elif role == Qt.ItemDataRole.FontRole:
             f = QFont("Consolas", 9)
