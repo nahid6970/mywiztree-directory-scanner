@@ -45,15 +45,27 @@ def _change_magnitude_color(delta: int | float | None) -> QColor:
         return QColor(CP_SUBTEXT)
 
     amount = abs(float(delta))
-    # Log scaling keeps tiny changes distinguishable while still allowing
-    # drive-sized changes to reach a much brighter shade.
-    low = math.log10(1 + 1024)  # 1 KiB
-    high = math.log10(1 + 100 * 1024**3)  # 100 GiB
-    strength = max(0.0, min(1.0, (math.log10(1 + amount) - low) / (high - low)))
-    hue = 120 if delta > 0 else 0
-    saturation = round(65 + 35 * strength)
-    value = round(105 + 150 * strength)
-    return QColor.fromHsv(hue, saturation, value)
+    # Distinct byte-size bands make medium changes easier to distinguish;
+    # the logarithmic interpolation keeps colors smooth within each band.
+    thresholds = (1, 16, 128, 1024, 10 * 1024)  # MiB
+    colors = (
+        (255, 158, 100), (255, 91, 86), (255, 40, 70), (255, 0, 60),
+        (255, 118, 130),
+    ) if delta < 0 else (
+        (72, 190, 150), (38, 205, 82), (82, 235, 30), (0, 255, 33),
+        (130, 255, 140),
+    )
+    mib = amount / (1024**2)
+    band = 0
+    while band < len(thresholds) - 1 and mib >= thresholds[band + 1]:
+        band += 1
+    start = thresholds[band]
+    end = thresholds[band + 1] if band + 1 < len(thresholds) else start * 10
+    progress = max(0.0, min(1.0, math.log1p(max(0.0, mib - start)) / math.log1p(end - start)))
+    low = colors[band]
+    high = colors[min(band + 1, len(colors) - 1)]
+    rgb = tuple(round(a + (b - a) * progress) for a, b in zip(low, high))
+    return QColor(*rgb)
 
 
 # ── Item model ────────────────────────────────────────────────────────────────
